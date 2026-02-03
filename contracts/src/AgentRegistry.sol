@@ -90,6 +90,9 @@ contract AgentRegistry is ERC721, ERC721URIStorage, Ownable, ReentrancyGuard {
     /// @notice Mapping from agent ID to ENS node
     mapping(uint256 => bytes32) public agentENSNode;
 
+    /// @notice Addresses authorized to update agent text records
+    mapping(address => bool) public authorizedCallers;
+
     // ═══════════════════════════════════════════════════════════════════════════
     // CONSTRUCTOR
     // ═══════════════════════════════════════════════════════════════════════════
@@ -228,13 +231,22 @@ contract AgentRegistry is ERC721, ERC721URIStorage, Ownable, ReentrancyGuard {
         string calldata value
     ) external {
         if (!_exists(agentId)) revert AgentDoesNotExist();
-        // Only contract owner or agent owner can update text records
-        if (msg.sender != owner() && msg.sender != ownerOf(agentId)) {
+        // Only contract owner, agent owner, or authorized callers can update text records
+        if (msg.sender != owner() && msg.sender != ownerOf(agentId) && !authorizedCallers[msg.sender]) {
             revert NotAgentOwner();
         }
 
         bytes32 node = agentENSNode[agentId];
         ensResolver.setText(node, key, value);
+    }
+
+    /**
+     * @notice Sets an address as authorized to update agent text records
+     * @param caller The address to authorize/deauthorize
+     * @param authorized Whether to authorize
+     */
+    function setAuthorizedCaller(address caller, bool authorized) external onlyOwner {
+        authorizedCallers[caller] = authorized;
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
