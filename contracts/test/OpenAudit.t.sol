@@ -280,40 +280,9 @@ contract OpenAuditTest is Test {
         );
         vm.stopPrank();
 
-        // 3. Agent commits a finding (from TBA address)
+        // 3-4. Commit and reveal finding
         string memory reportCID = "QmReportCID123";
-        string memory pocTestCID = "QmPocTestCID456";
-        uint256 salt = 12345;
-
-        bytes32 commitHash = bountyHive.computeCommitmentHash(tba, reportCID, salt);
-
-        vm.prank(tba);
-        bountyHive.commitFinding(bountyId, commitHash);
-
-        // Verify commitment
-        BountyHive.Commitment memory commitment = bountyHive.getCommitment(tba, bountyId);
-        assertEq(commitment.hash, commitHash, "Commitment hash incorrect");
-        assertFalse(commitment.revealed, "Should not be revealed yet");
-
-        // 4. Agent reveals the finding
-        vm.prank(tba);
-        bountyHive.revealFinding(bountyId, reportCID, pocTestCID, salt);
-
-        // Verify reveal
-        commitment = bountyHive.getCommitment(tba, bountyId);
-        assertTrue(commitment.revealed, "Should be revealed");
-
-        (
-            address submitter,
-            string memory storedReportCID,
-            string memory storedPocCID,
-            uint256 revealedAt
-        ) = bountyHive.findings(bountyId, tba);
-
-        assertEq(submitter, tba, "Submitter incorrect");
-        assertEq(storedReportCID, reportCID, "Report CID incorrect");
-        assertEq(storedPocCID, pocTestCID, "PoC CID incorrect");
-        assertTrue(revealedAt > 0, "Should have reveal timestamp");
+        _commitAndRevealFinding(tba, bountyId, reportCID, "QmPocTestCID456", 12345);
 
         // 5. Judge resolves the bounty
         uint256 tbaBalanceBefore = tba.balance;
@@ -321,32 +290,57 @@ contract OpenAuditTest is Test {
         vm.prank(judge);
         bountyHive.resolveBounty(bountyId, tba, BountyHive.Severity.Critical);
 
-        uint256 tbaBalanceAfter = tba.balance;
-
         // Verify reward was transferred
-        assertEq(tbaBalanceAfter - tbaBalanceBefore, 1 ether, "Reward not transferred");
+        assertEq(tba.balance - tbaBalanceBefore, 1 ether, "Reward not transferred");
 
-        // Verify bounty status
-        (, , , , , BountyHive.BountyStatus status, address winner, BountyHive.Severity severity) = 
+        // 6. Verify bounty status and reputation
+        _verifyBountyResolved(bountyId, tba);
+        _verifyReputation(tba, 100, 1, 100);
+
+        // 7. Verify ENS text records were updated
+        _verifyENSRecords(agentId, "100", reportCID);
+    }
+
+    function _commitAndRevealFinding(
+        address tba,
+        uint256 bountyId,
+        string memory reportCID,
+        string memory pocTestCID,
+        uint256 salt
+    ) internal {
+        bytes32 commitHash = bountyHive.computeCommitmentHash(tba, reportCID, salt);
+
+        vm.prank(tba);
+        bountyHive.commitFinding(bountyId, commitHash);
+
+        vm.prank(tba);
+        bountyHive.revealFinding(bountyId, reportCID, pocTestCID, salt);
+    }
+
+    function _verifyBountyResolved(uint256 bountyId, address expectedWinner) internal view {
+        (, , , , , BountyHive.BountyStatus status, address winner, ) = 
             bountyHive.bounties(bountyId);
 
         assertEq(uint8(status), uint8(BountyHive.BountyStatus.Resolved), "Status should be Resolved");
-        assertEq(winner, tba, "Winner incorrect");
-        assertEq(uint8(severity), uint8(BountyHive.Severity.Critical), "Severity incorrect");
+        assertEq(winner, expectedWinner, "Winner incorrect");
+    }
 
-        // 6. Verify reputation was updated
+    function _verifyReputation(
+        address tba,
+        uint256 expectedTotal,
+        uint256 expectedCount,
+        uint256 expectedAvg
+    ) internal view {
         (uint256 totalScore, uint256 feedbackCount, uint256 avgScore) = reputationRegistry.getScore(tba);
-        assertEq(totalScore, 100, "Total score should be 100 (Critical)");
-        assertEq(feedbackCount, 1, "Feedback count should be 1");
-        assertEq(avgScore, 100, "Average score should be 100");
+        assertEq(totalScore, expectedTotal, "Total score incorrect");
+        assertEq(feedbackCount, expectedCount, "Feedback count incorrect");
+        assertEq(avgScore, expectedAvg, "Average score incorrect");
+    }
 
-        // 7. Verify ENS text records were updated
+    function _verifyENSRecords(uint256 agentId, string memory expectedScore, string memory expectedLastAudit) internal view {
         bytes32 agentNode = agentRegistry.agentENSNode(agentId);
-        string memory scoreRecord = ensResolver.text(agentNode, "score");
-        assertEq(scoreRecord, "100", "ENS score record incorrect");
-
-        string memory lastAuditRecord = ensResolver.text(agentNode, "last_audit");
-        assertEq(lastAuditRecord, reportCID, "ENS last_audit record incorrect");
+        assertEq(ensResolver.text(agentNode, "score"), expectedScore, "ENS score record incorrect");
+        assertEq(ensResolver.text(agentNode, "last_audit"), expectedLastAudit, "ENS last_audit record incorrect");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
