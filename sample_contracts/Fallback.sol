@@ -1,16 +1,13 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.6.0;
+pragma solidity ^0.8.0;
 
-contract Fallout {
-    // using SafeMath for uint256;
+contract Fallback {
+    mapping(address => uint256) public contributions;
+    address public owner;
 
-    mapping(address => uint256) allocations;
-    address payable public owner;
-
-    /* constructor */
-    function Fal1out() public payable {
+    constructor() {
         owner = msg.sender;
-        allocations[owner] = msg.value;
+        contributions[msg.sender] = 1000 * (1 ether);
     }
 
     modifier onlyOwner() {
@@ -18,20 +15,24 @@ contract Fallout {
         _;
     }
 
-    function allocate() public payable {
-        allocations[msg.sender] = allocations[msg.sender] + (msg.value);
+    function contribute() public payable {
+        require(msg.value < 0.001 ether);
+        contributions[msg.sender] += msg.value;
+        if (contributions[msg.sender] > contributions[owner]) {
+            owner = msg.sender;
+        }
     }
 
-    function sendAllocation(address payable allocator) public {
-        require(allocations[allocator] > 0);
-        allocator.transfer(allocations[allocator]);
+    function getContribution() public view returns (uint256) {
+        return contributions[msg.sender];
     }
 
-    function collectAllocations() public onlyOwner {
-        msg.sender.transfer(address(this).balance);
+    function withdraw() public onlyOwner {
+        payable(owner).transfer(address(this).balance);
     }
 
-    function allocatorBalance(address allocator) public view returns (uint256) {
-        return allocations[allocator];
+    receive() external payable {
+        require(msg.value > 0 && contributions[msg.sender] > 0);
+        owner = msg.sender;
     }
 }
