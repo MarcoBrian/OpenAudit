@@ -84,8 +84,9 @@ contract OpenAuditTest is Test {
         reputationRegistry.setAgentRegistry(address(agentRegistry));
         reputationRegistry.setAuthorizedReviewer(address(bountyHive), true);
         
-        // Authorize ReputationRegistry to update ENS text records
+        // Authorize ReputationRegistry and BountyHive to update ENS text records
         agentRegistry.setAuthorizedCaller(address(reputationRegistry), true);
+        agentRegistry.setAuthorizedCaller(address(bountyHive), true);
 
         // Set up ENS parent node ownership
         ensRegistry.setNodeOwner(PARENT_NODE, address(agentRegistry));
