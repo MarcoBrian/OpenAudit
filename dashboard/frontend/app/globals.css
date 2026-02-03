@@ -100,6 +100,42 @@ input[type="file"] {
   color: #121723;
 }
 
+.file-input {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid #d8dde6;
+  background: #ffffff;
+}
+
+.file-input input[type="file"] {
+  display: none;
+}
+
+.file-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 12px;
+  border-radius: 10px;
+  border: 1px solid #d8dde6;
+  background: #f1f4fa;
+  color: #1f2a3a;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.file-name {
+  color: #5b6474;
+  font-size: 13px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 input[type="number"] {
   width: 100%;
   padding: 10px 12px;
@@ -192,6 +228,15 @@ pre {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.spinner {
+  width: 12px;
+  height: 12px;
+  border-radius: 999px;
+  border: 2px solid #d9e3f2;
+  border-top-color: #4c7dff;
+  animation: spin 0.8s linear infinite;
 }
 
 .progress-dot {
@@ -451,6 +496,44 @@ pre {
   margin-bottom: 6px;
 }
 
+.markdown {
+  color: #1f2a3a;
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+.markdown p {
+  margin: 0 0 10px;
+}
+
+.markdown ul,
+.markdown ol {
+  margin: 0 0 10px 18px;
+  padding: 0;
+}
+
+.markdown code {
+  font-family: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  background: #eef2f7;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+.markdown strong {
+  font-weight: 600;
+}
+
+.markdown-inline code {
+  font-family: "SF Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    "Liberation Mono", "Courier New", monospace;
+  font-size: 12px;
+  background: #eef2f7;
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
 .footer {
   margin-top: 24px;
   font-size: 12px;
@@ -465,5 +548,11 @@ pre {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
   }
 }

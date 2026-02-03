@@ -157,12 +157,15 @@ frontend that streams progress.
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
-uvicorn server.app:app --reload
+
+# Run from dashboard/server
+cd dashboard/server
+uvicorn app:app --reload
 ```
 
 ### Frontend (Next.js)
 ```bash
-cd frontend
+cd dashboard/frontend
 npm install
 NEXT_PUBLIC_API_BASE=http://localhost:8000 npm run dev
 ```

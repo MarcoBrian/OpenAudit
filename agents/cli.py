@@ -126,6 +126,7 @@ def build_submission_payload(
     findings: list[dict],
     triaged: list[dict],
     static_tools: list[str],
+    reports_dir: Path | None = None,
 ) -> dict:
     def normalize_confidence(value: object) -> float:
         if isinstance(value, (int, float)):
@@ -149,7 +150,15 @@ def build_submission_payload(
     remediation = top.get("remediation") or "Review and apply standard mitigations."
     repro = top.get("repro")
 
-    references = [Reference(**reference) for reference in build_references(title)]
+    references_payload = build_references(
+        issue_title=title,
+        description=description,
+        impact=impact,
+        severity=severity,
+    )
+    if reports_dir:
+        write_json("solodit.json", references_payload, reports_dir)
+    references = [Reference(**reference) for reference in references_payload]
     evidence = Evidence(
         static_tool="+".join(static_tools),
         raw_findings=[
@@ -243,6 +252,7 @@ def run_linear(
         findings=findings,
         triaged=triaged,
         static_tools=tools,
+        reports_dir=reports_dir if dump_intermediate else None,
     )
     if progress:
         progress.complete("finalize", "Submission ready")

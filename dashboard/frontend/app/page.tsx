@@ -1,6 +1,9 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
@@ -38,7 +41,23 @@ const severityClass = (value?: string) => {
   return "";
 };
 
-const renderJson = (value: JsonValue, depth = 0): JSX.Element => {
+const MarkdownInline = ({ value }: { value: string }) => {
+  return (
+    <span className="markdown-inline">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          p: ({ children }) => <span>{children}</span>,
+          code: ({ children }) => <code>{children}</code>
+        }}
+      >
+        {value}
+      </ReactMarkdown>
+    </span>
+  );
+};
+
+const renderJson = (value: JsonValue, depth = 0): ReactNode => {
   if (Array.isArray(value)) {
     return (
       <div className="json-indent">
@@ -66,6 +85,10 @@ const renderJson = (value: JsonValue, depth = 0): JSX.Element => {
                 <summary className="summary muted">Expand</summary>
                 {renderJson(val as JsonValue, depth + 1)}
               </details>
+            ) : typeof val === "string" ? (
+              <div className="json-value">
+                <MarkdownInline value={val} />
+              </div>
             ) : (
               <div className="json-value">{String(val)}</div>
             )}
@@ -75,6 +98,17 @@ const renderJson = (value: JsonValue, depth = 0): JSX.Element => {
     );
   }
   return <div className="json-value">{String(value)}</div>;
+};
+
+const MarkdownBlock = ({ value }: { value?: string }) => {
+  if (!value) {
+    return <div className="muted">Not provided.</div>;
+  }
+  return (
+    <div className="markdown">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{value}</ReactMarkdown>
+    </div>
+  );
 };
 
 const parseTimestamp = (value?: string) => {
@@ -251,6 +285,9 @@ export default function Home() {
   const submissionImpact = typeof submission?.impact === "string" ? submission.impact : undefined;
   const submissionDescription =
     typeof submission?.description === "string" ? submission.description : undefined;
+  const submissionRemediation =
+    typeof submission?.remediation === "string" ? submission.remediation : undefined;
+  const submissionRepro = typeof submission?.repro === "string" ? submission.repro : undefined;
 
   const elapsed = useMemo(() => {
     if (!events.length) return null;
@@ -280,6 +317,15 @@ export default function Home() {
     const end = parseTimestamp(endEvent?.timestamp);
     if (!start || !end) return null;
     return end - start;
+  };
+
+  const hasLaterTerminal = (index: number, step: string) => {
+    for (let i = index + 1; i < events.length; i += 1) {
+      if (events[i].step === step && (events[i].status === "completed" || events[i].status === "failed")) {
+        return true;
+      }
+    }
+    return false;
   };
 
   return (
@@ -314,11 +360,18 @@ export default function Home() {
           <div className="row">
             <div style={{ flex: 1 }}>
               <label>Solidity File</label>
-              <input
-                type="file"
-                accept=".sol"
-                onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
-              />
+              <div className="file-input">
+                <input
+                  id="solidity-file"
+                  type="file"
+                  accept=".sol"
+                  onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
+                />
+                <label htmlFor="solidity-file" className="file-button">
+                  Choose file
+                </label>
+                <span className="file-name">{fileName || "No file selected"}</span>
+              </div>
             </div>
           </div>
           <div style={{ marginTop: 16 }}>
@@ -402,10 +455,15 @@ export default function Home() {
             ))}
           </div>
           <ul className="progress-list">
-            {events.map((event) => (
+            {events.map((event, index) => (
               <li key={`${event.step}-${event.timestamp}`} className="entered">
                 <div className="progress-step">
                   <span className={`progress-dot ${event.status}`} />
+                  {event.status === "running" &&
+                    event.step !== "queued" &&
+                    !hasLaterTerminal(index, event.step) && (
+                    <span className="spinner" />
+                  )}
                   <div>
                     <strong>{event.step}</strong>
                     <div className="muted" style={{ fontSize: 13 }}>
@@ -435,8 +493,22 @@ export default function Home() {
               )}
             </div>
             <div className="top-title">{submissionTitle}</div>
-            <div className="muted">{submissionImpact}</div>
-            <div style={{ marginTop: 10 }}>{submissionDescription}</div>
+            <div className="section-title" style={{ marginTop: 12 }}>
+              Impact
+            </div>
+            <MarkdownBlock value={submissionImpact} />
+            <div className="section-title" style={{ marginTop: 12 }}>
+              Description
+            </div>
+            <MarkdownBlock value={submissionDescription} />
+            <div className="section-title" style={{ marginTop: 12 }}>
+              Remediation
+            </div>
+            <MarkdownBlock value={submissionRemediation} />
+            <div className="section-title" style={{ marginTop: 12 }}>
+              Repro
+            </div>
+            <MarkdownBlock value={submissionRepro} />
           </div>
         ) : (
           <div className="muted">No top finding yet.</div>

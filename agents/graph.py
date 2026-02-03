@@ -126,6 +126,7 @@ def node_finalize(state: AgentState) -> AgentState:
         findings=state["findings"],
         triaged=triaged,
         static_tools=state["tools"],
+        reports_dir=state.get("reports_dir"),
     )
     if progress:
         progress.complete("finalize", "Submission ready")

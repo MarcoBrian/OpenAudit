@@ -51,7 +51,6 @@ def logic_review(
 ) -> List[Dict[str, Any]]:
     api_key = os.getenv("OPENAI_API_KEY")
     ollama_model = os.getenv("OLLAMA_MODEL")
-    print(ollama_model)
     if not api_key and not ollama_model:
         return []
 

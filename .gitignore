@@ -6,7 +6,9 @@ __pycache__/
 dist/
 build/
 reports/
+dashboard/runs/
 node_modules/
+.next/
 */.next/
 out/
 coverage/
