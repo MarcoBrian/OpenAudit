@@ -6,7 +6,7 @@ import "@openzeppelin/contracts/token/ERC721/extensions/ERC721URIStorage.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-import "./interfaces/IERC6551Registry.sol";
+import "erc6551/interfaces/IERC6551Registry.sol";
 import "./interfaces/IENSRegistry.sol";
 
 /**
