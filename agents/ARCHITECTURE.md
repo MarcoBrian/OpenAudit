@@ -4,8 +4,10 @@ This document captures the week-1 architecture and implementation plan for the A
 
 ## Goals
 - Analyze a single Solidity file with Aderyn and/or Slither.
+- Normalize findings into a unified static-analysis summary.
 - Triage findings (LLM if available, heuristic fallback if not).
-- Ground findings with Solodit references.
+- Run logic review for drain/flow bugs (LLM when available).
+- Ground findings with Solodit references (API if configured).
 - Output a canonical submission JSON object.
 
 ## System Overview
@@ -13,10 +15,12 @@ The MVP is a local CLI pipeline that takes one `.sol` file and produces a struct
 
 ```
 User Input (.sol)
-  → Aderyn or Slither Static Analysis
-  → Raw Findings (report.json)
+  → Aderyn/Slither Static Analysis
+  → Raw Reports (aderyn_report.json, slither_report.json)
+  → Static Analysis Summary (static_analysis_summary.json)
   → Triage (LLM or heuristic)
-  → Solodit References
+  → Logic Review (LLM)
+  → Solodit References (API if available)
   → Submission JSON
 ```
 
@@ -35,9 +39,13 @@ User Input (.sol)
 - Extracts findings, scores them, optionally calls LLM.
 - Heuristic ranking is used when no API key is present or LLM fails.
 
+### Logic Review
+- `agents/logic.py`
+- LLM-only reasoning pass to identify drain/flow bugs not flagged by tools.
+
 ### Solodit Reference Builder
 - `agents/solodit.py`
-- Produces Solodit search links for the top issue.
+- Calls Solodit Findings API when configured, otherwise returns no references.
 
 ### Submission Schema
 - `agents/schema.py`
@@ -46,10 +54,11 @@ User Input (.sol)
 ## Data Flow
 1. User runs the CLI with `--file`.
 2. Aderyn and/or Slither run and return report JSON.
-3. Findings are normalized and ranked.
-4. Top issue is selected and expanded.
-5. Solodit search link is attached as reference.
-6. Output is saved to `submission.json`.
+3. Findings are normalized into `static_analysis_summary.json`.
+4. Triage selects top issues from the summary.
+5. Logic review optionally adds new logic-focused issues.
+6. Solodit references are attached to the top issue.
+7. Output is saved to `submission.json`.
 
 ## LangGraph Orchestration (Optional)
 When `--use-graph` is set, the same pipeline runs through a LangGraph state
@@ -57,6 +66,7 @@ machine with the following nodes:
 - Scan
 - Extract
 - Triage
+- Logic
 - Finalize
 
 ## Configuration
@@ -65,12 +75,21 @@ Environment variables (optional):
 - `OPENAI_API_KEY`: enables LLM triage.
 - `OPENAI_MODEL`: defaults to `gpt-4o-mini`.
 - `OPENAI_BASE_URL`: defaults to `https://api.openai.com/v1`.
+- `OLLAMA_MODEL`: local LLM model name.
+- `OLLAMA_BASE_URL`: defaults to `http://localhost:11434`.
 
 ## Tool Selection
 Use `--tools` to select one or both scanners:
 - `--tools aderyn`
 - `--tools slither`
 - `--tools aderyn,slither`
+
+## Intermediate Outputs
+The CLI can write intermediate artifacts to `reports/`:
+- `aderyn_report.json`, `slither_report.json`
+- `static_analysis_summary.json`
+- `triage.json`
+- `logic.json`
 
 ## Non-Goals (Week-1)
 - Repo-scale or multi-file analysis.

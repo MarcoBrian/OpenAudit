@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 import requests
 
+from agents.ollama_client import call_ollama
+
 
 def _normalize_finding(
     finding: Dict[str, Any],
@@ -135,20 +137,33 @@ def triage_findings(
         return heuristic_rank(detectors, max_issues)
 
     api_key = os.getenv("OPENAI_API_KEY")
-    if not api_key:
+    ollama_model = os.getenv("OLLAMA_MODEL")
+    if not api_key and not ollama_model:
         return heuristic_rank(detectors, max_issues)
 
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
     model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     try:
-        return call_llm(
-            detectors,
-            max_issues=max_issues,
-            api_key=api_key,
-            base_url=base_url,
-            model=model,
+        if api_key:
+            return call_llm(
+                detectors,
+                max_issues=max_issues,
+                api_key=api_key,
+                base_url=base_url,
+                model=model,
+            )
+        prompt = (
+            "You are a smart-contract security triage agent. "
+            "Given static analysis findings, pick the top vulnerabilities that are likely real "
+            "and produce a JSON array of objects with fields: title, severity, confidence, "
+            "description, impact, remediation, repro.\n\n"
+            f"Limit to top {max_issues} issues. "
+            "Use severity in [LOW, MEDIUM, HIGH, CRITICAL]. Confidence is 0-1.\n\n"
+            "Findings:\n"
+            f"{json.dumps(detectors, indent=2)}"
         )
+        return call_ollama(prompt=prompt, model=ollama_model)
     except (requests.RequestException, ValueError):
         return heuristic_rank(detectors, max_issues)
 
