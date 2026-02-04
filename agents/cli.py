@@ -8,14 +8,16 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-from agents.schema import Evidence, Reference, build_submission
+from agents.submission import build_submission_payload
 from agents.aderyn_runner import AderynError, run_aderyn
 from agents.slither_runner import run_slither
-from agents.solodit import build_references
 from agents.logic import logic_review
 from agents.progress import ProgressReporter
 from agents.reporting import write_json, write_report
 from agents.triage import extract_findings, filter_findings, triage_findings
+from agents.graph import run_workflow
+from agents.wallet import WalletInitError, get_wallet_details
+from agents.langchain_agent import run_agent
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -118,74 +120,43 @@ def build_parser() -> argparse.ArgumentParser:
         help="Max logic issues to output",
     )
 
+    wallet_parser = subparsers.add_parser("wallet", help="Show AgentKit wallet details")
+    wallet_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Output raw wallet details as JSON",
+    )
+
+    agent_parser = subparsers.add_parser("agent", help="Run LangChain agent runtime")
+    agent_parser.add_argument(
+        "--mode",
+        choices=["chat", "auto"],
+        default="chat",
+        help="Agent runtime mode",
+    )
+    agent_parser.add_argument(
+        "--interval",
+        type=int,
+        default=10,
+        help="Seconds between autonomous actions (auto mode)",
+    )
+    agent_parser.add_argument(
+        "--no-wallet-tools",
+        action="store_true",
+        help="Disable AgentKit wallet tools",
+    )
+    agent_parser.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Enable verbose agent logging",
+    )
+    agent_parser.add_argument(
+        "--system-prompt",
+        default=None,
+        help="Override the default agent system prompt",
+    )
+
     return parser
-
-
-def build_submission_payload(
-    *,
-    solidity_file: Path,
-    findings: list[dict],
-    triaged: list[dict],
-    static_tools: list[str],
-    reports_dir: Path | None = None,
-) -> dict:
-    def normalize_confidence(value: object) -> float:
-        if isinstance(value, (int, float)):
-            return float(value)
-        if isinstance(value, str):
-            mapping = {"low": 0.3, "medium": 0.6, "high": 0.85}
-            normalized = mapping.get(value.strip().lower())
-            if normalized is not None:
-                return normalized
-        return 0.5
-
-    if not triaged:
-        return {"message": "No actionable findings detected.", "findings": []}
-
-    top = triaged[0]
-    title = top.get("title") or top.get("check") or "Potential vulnerability"
-    severity = top.get("severity") or "MEDIUM"
-    confidence = normalize_confidence(top.get("confidence", 0.5))
-    description = top.get("description") or "No description provided."
-    impact = top.get("impact") or "Potential impact not specified."
-    remediation = top.get("remediation") or "Review and apply standard mitigations."
-    repro = top.get("repro")
-
-    references_payload = build_references(
-        issue_title=title,
-        description=description,
-        impact=impact,
-        severity=severity,
-        confidence=confidence,
-    )
-    if reports_dir:
-        write_json("solodit.json", references_payload, reports_dir)
-    references = [Reference(**reference) for reference in references_payload]
-    evidence = Evidence(
-        static_tool="+".join(static_tools),
-        raw_findings=[
-            finding.get("title")
-            or finding.get("check")
-            or finding.get("name")
-            or "unknown"
-            for finding in findings
-        ],
-        file_path=str(solidity_file),
-    )
-
-    submission = build_submission(
-        title=title,
-        severity=severity,
-        confidence=confidence,
-        description=description,
-        impact=impact,
-        references=references,
-        remediation=remediation,
-        repro=repro,
-        evidence=evidence,
-    )
-
-    return submission.to_dict()
 
 
 def run_linear(
@@ -292,8 +263,6 @@ def run_graph(
     progress: ProgressReporter | None = None,
     reports_dir: Path | None = None,
 ) -> dict:
-    from agents.graph import run_workflow
-
     return run_workflow(
         solidity_file=solidity_file,
         max_issues=max_issues,
@@ -369,6 +338,25 @@ def main() -> int:
         ) if not args.no_llm else []
         write_json("logic.json", logic_findings, reports_dir)
         return 0
+
+    if command == "wallet":
+        try:
+            details = get_wallet_details()
+        except WalletInitError as exc:
+            print(f"Wallet init failed: {exc}")
+            return 1
+        payload = details.raw if args.json else details.to_dict()
+        print(json.dumps(payload, indent=2))
+        return 0
+
+    if command == "agent":
+        return run_agent(
+            mode=args.mode,
+            include_wallet_tools=not args.no_wallet_tools,
+            interval=args.interval,
+            verbose=args.verbose,
+            system_prompt=args.system_prompt,
+        )
 
     solidity_file = Path(args.file)
     tools = [tool.strip().lower() for tool in args.tools.split(",") if tool.strip()]

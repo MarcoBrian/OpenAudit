@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -360,7 +361,6 @@ def build_references(
         
         # Debug: log the query being sent
         if os.getenv("SOLODIT_DEBUG"):
-            import sys
             print(f"Solodit query: {keywords_query}", file=sys.stderr)
             print(f"Query parts: {query_parts}", file=sys.stderr)
         
@@ -405,9 +405,7 @@ def build_references(
 
         # Debug: log the request body
         if os.getenv("SOLODIT_DEBUG"):
-            import sys
-            import json as json_module
-            print(f"Solodit request body: {json_module.dumps(body, indent=2)}", file=sys.stderr)
+            print(f"Solodit request body: {json.dumps(body, indent=2)}", file=sys.stderr)
 
         response = requests.post(
             f"{base_url.rstrip('/')}{endpoint}",
@@ -436,13 +434,11 @@ def build_references(
         if not items:
             # Check if response has any useful info
             if os.getenv("DEBUG") or os.getenv("SOLODIT_DEBUG"):
-                import sys
                 print(f"Solodit API returned no items.", file=sys.stderr)
                 print(f"Response type: {type(response_data)}", file=sys.stderr)
                 if isinstance(response_data, dict):
                     print(f"Response keys: {list(response_data.keys())}", file=sys.stderr)
                     # Show first 500 chars of response for debugging
-                    import json
                     print(f"Response preview: {json.dumps(response_data, indent=2)[:500]}", file=sys.stderr)
                 elif isinstance(response_data, list):
                     print(f"Response is a list with {len(response_data)} items", file=sys.stderr)
@@ -457,20 +453,17 @@ def build_references(
         return references
     except requests.HTTPError as e:
         # Log HTTP errors (401, 403, 404, 500, etc.)
-        import sys
         error_msg = f"Solodit API HTTP error: {e.response.status_code} - {e.response.text[:200] if e.response else str(e)}"
         if os.getenv("DEBUG") or os.getenv("SOLODIT_DEBUG"):
             print(error_msg, file=sys.stderr)
         return []
     except requests.RequestException as e:
         # Log other request errors (network, timeout, etc.)
-        import sys
         if os.getenv("DEBUG") or os.getenv("SOLODIT_DEBUG"):
             print(f"Solodit API request error: {e}", file=sys.stderr)
         return []
     except Exception as e:
         # Catch any other unexpected errors
-        import sys
         if os.getenv("DEBUG") or os.getenv("SOLODIT_DEBUG"):
             print(f"Solodit API unexpected error: {e}", file=sys.stderr)
         return []

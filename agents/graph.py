@@ -5,9 +5,17 @@ import os
 import sys
 from typing import Dict, List, TypedDict
 
+try:
+    from langgraph.graph import StateGraph
+except ImportError as exc:  # pragma: no cover - optional dependency
+    StateGraph = None  # type: ignore[assignment]
+    _LANGGRAPH_IMPORT_ERROR = exc
+else:
+    _LANGGRAPH_IMPORT_ERROR = None
+
 from agents.aderyn_runner import AderynError, run_aderyn
 from agents.slither_runner import run_slither
-from agents.cli import build_submission_payload
+from agents.submission import build_submission_payload
 from agents.reporting import write_json, write_report
 from agents.logic import logic_review
 from agents.progress import ProgressReporter
@@ -166,12 +174,10 @@ def run_workflow(
     progress: ProgressReporter | None = None,
     reports_dir: Path | None = None,
 ) -> Dict:
-    try:
-        from langgraph.graph import StateGraph
-    except ImportError as exc:
+    if StateGraph is None:
         raise RuntimeError(
             "LangGraph is not installed. Install it with: pip install langgraph"
-        ) from exc
+        ) from _LANGGRAPH_IMPORT_ERROR
 
     graph = StateGraph(AgentState)
     graph.add_node("scan", node_scan)
