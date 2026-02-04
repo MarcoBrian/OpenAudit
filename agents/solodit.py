@@ -8,6 +8,40 @@ from typing import Any, Dict, List, Optional
 import requests
 
 
+DEFAULT_MATCH_TAGS = [
+    "reentrancy",
+    "access control",
+    "authorization",
+    "ownership",
+    "privilege",
+    "front-running",
+    "frontrun",
+    "mev",
+    "flash loan",
+    "oracle",
+    "price manipulation",
+    "dos",
+    "denial of service",
+    "overflow",
+    "underflow",
+    "integer overflow",
+    "integer underflow",
+    "signature",
+    "replay",
+    "tx origin",
+    "delegatecall",
+    "selfdestruct",
+    "uninitialized",
+    "storage collision",
+    "upgrade",
+    "proxy",
+    "initialization",
+    "randomness",
+    "block timestamp",
+    "unbounded loop",
+]
+
+
 def _extract_items(payload: Any) -> List[Dict[str, Any]]:
     if isinstance(payload, list):
         return [item for item in payload if isinstance(item, dict)]
@@ -27,6 +61,59 @@ def _auth_headers() -> Dict[str, str]:
     prefix = os.getenv("SOLODIT_AUTH_PREFIX", "")
     value = f"{prefix} {api_key}".strip() if prefix else api_key
     return {header: value}
+
+
+def _canonicalize_text(text: str) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", text.lower())
+    return f" {normalized.strip()} "
+
+
+def _solodit_enabled() -> bool:
+    enabled = os.getenv("SOLODIT_ENABLED", "1").strip().lower()
+    return enabled not in {"0", "false", "no", "off"}
+
+
+def _confidence_threshold() -> float:
+    raw = os.getenv("SOLODIT_MIN_CONFIDENCE", "0.7").strip()
+    try:
+        return float(raw)
+    except ValueError:
+        return 0.7
+
+
+def _match_tags() -> List[str]:
+    raw = os.getenv("SOLODIT_MATCH_TAGS", "")
+    tags = [value.strip() for value in raw.split(",") if value.strip()]
+    return tags or DEFAULT_MATCH_TAGS
+
+
+def _issue_tag_match(issue_text: str) -> bool:
+    tags = _match_tags()
+    if not tags:
+        return False
+    if not issue_text:
+        return False
+
+    keywords = _extract_keywords(issue_text, max_words=12)
+    combined = f"{issue_text} {keywords}".strip()
+    canonical_text = _canonicalize_text(combined)
+    for tag in tags:
+        canonical_tag = _canonicalize_text(tag).strip()
+        if canonical_tag and canonical_tag in canonical_text:
+            return True
+    return False
+
+
+def _label_reference_note(note: str) -> str:
+    label = os.getenv(
+        "SOLODIT_REFERENCE_LABEL",
+        "Related research / similar cases",
+    ).strip()
+    if not label:
+        return note
+    if not note:
+        return label
+    return f"{label}: {note}"
 
 
 def _build_reference(item: Dict[str, Any], base_url: str) -> Dict[str, str]:
@@ -223,7 +310,18 @@ def build_references(
     description: str = "",
     impact: str = "",
     severity: str = "",
+    confidence: float | None = None,
 ) -> List[Dict[str, str]]:
+    if not _solodit_enabled():
+        return []
+
+    if confidence is not None and confidence < _confidence_threshold():
+        return []
+
+    issue_text = " ".join(value for value in [issue_title, description, impact] if value)
+    if not _issue_tag_match(issue_text):
+        return []
+
     base_url = os.getenv("SOLODIT_BASE_URL", "https://solodit.cyfrin.io/api/v1/solodit")
     endpoint = os.getenv("SOLODIT_FINDINGS_ENDPOINT", "/findings")
     page = int(os.getenv("SOLODIT_PAGE", "1"))
@@ -353,7 +451,10 @@ def build_references(
         # Extract tags from findings to build up our tag cache
         _extract_tags_from_findings(items)
         
-        return [_build_reference(item, base_url) for item in items]
+        references = [_build_reference(item, base_url) for item in items]
+        for reference in references:
+            reference["note"] = _label_reference_note(reference.get("note", ""))
+        return references
     except requests.HTTPError as e:
         # Log HTTP errors (401, 403, 404, 500, etc.)
         import sys
@@ -373,4 +474,3 @@ def build_references(
         if os.getenv("DEBUG") or os.getenv("SOLODIT_DEBUG"):
             print(f"Solodit API unexpected error: {e}", file=sys.stderr)
         return []
-

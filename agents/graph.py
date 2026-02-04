@@ -2,15 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 import os
+import sys
 from typing import Dict, List, TypedDict
 
-from agents.aderyn_runner import run_aderyn
+from agents.aderyn_runner import AderynError, run_aderyn
 from agents.slither_runner import run_slither
 from agents.cli import build_submission_payload
 from agents.reporting import write_json, write_report
 from agents.logic import logic_review
 from agents.progress import ProgressReporter
-from agents.triage import extract_findings, triage_findings
+from agents.triage import extract_findings, filter_findings, triage_findings
 
 
 class AgentState(TypedDict, total=False):
@@ -18,6 +19,7 @@ class AgentState(TypedDict, total=False):
     max_issues: int
     use_llm: bool
     tools: List[str]
+    tools_used: List[str]
     progress: ProgressReporter | None
     reports_dir: Path
     report_jsons: List[Dict]
@@ -29,6 +31,7 @@ class AgentState(TypedDict, total=False):
 
 def node_scan(state: AgentState) -> AgentState:
     report_jsons: List[Dict] = []
+    tools_used: List[str] = []
     reports_dir = state.get("reports_dir") or (
         Path(__file__).resolve().parent.parent / "reports"
     )
@@ -37,9 +40,23 @@ def node_scan(state: AgentState) -> AgentState:
         if tool == "aderyn":
             if progress:
                 progress.start("scan.aderyn", "Running Aderyn")
-            report_json = run_aderyn(state["solidity_file"])
+            try:
+                report_json = run_aderyn(state["solidity_file"])
+            except AderynError as exc:
+                if progress:
+                    progress.complete(
+                        "scan.aderyn",
+                        "Aderyn failed; continuing with remaining tools",
+                    )
+                else:
+                    print(
+                        f"warning: aderyn failed; continuing ({exc})",
+                        file=sys.stderr,
+                    )
+                continue
             write_report("aderyn", report_json, reports_dir)
             report_jsons.append({"source": "aderyn", "data": report_json})
+            tools_used.append("aderyn")
             if progress:
                 progress.complete("scan.aderyn", "Aderyn report ready")
         elif tool == "slither":
@@ -48,11 +65,12 @@ def node_scan(state: AgentState) -> AgentState:
             report_json = run_slither(state["solidity_file"])
             write_report("slither", report_json, reports_dir)
             report_jsons.append({"source": "slither", "data": report_json})
+            tools_used.append("slither")
             if progress:
                 progress.complete("scan.slither", "Slither report ready")
         else:
             raise ValueError(f"Unknown tool: {tool}")
-    return {"report_jsons": report_jsons}
+    return {"report_jsons": report_jsons, "tools_used": tools_used}
 
 
 def node_extract(state: AgentState) -> AgentState:
@@ -62,12 +80,15 @@ def node_extract(state: AgentState) -> AgentState:
         progress.start("extract", "Normalizing findings")
     for report in state["report_jsons"]:
         findings.extend(extract_findings(report["data"], source=report["source"]))
+    filtered = filter_findings(findings)
     reports_dir = state.get("reports_dir")
     if reports_dir:
-        write_json("static_analysis_summary.json", findings, reports_dir)
+        write_json("static_analysis_summary.json", filtered, reports_dir)
     if progress:
-        progress.complete("extract", f"Extracted {len(findings)} findings")
-    return {"findings": findings}
+        dropped = len(findings) - len(filtered)
+        suffix = f", filtered {dropped}" if dropped > 0 else ""
+        progress.complete("extract", f"Extracted {len(findings)} findings{suffix}")
+    return {"findings": filtered}
 
 
 def node_triage(state: AgentState) -> AgentState:
@@ -121,11 +142,14 @@ def node_finalize(state: AgentState) -> AgentState:
     progress = state.get("progress")
     if progress:
         progress.start("finalize", "Building submission")
+    tools_used = state.get("tools_used")
+    if tools_used is None:
+        tools_used = state["tools"]
     submission = build_submission_payload(
         solidity_file=state["solidity_file"],
         findings=state["findings"],
         triaged=triaged,
-        static_tools=state["tools"],
+        static_tools=tools_used,
         reports_dir=state.get("reports_dir"),
     )
     if progress:
@@ -174,4 +198,3 @@ def run_workflow(
         }
     )
     return result["submission"]
-

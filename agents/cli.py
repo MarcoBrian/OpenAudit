@@ -3,18 +3,19 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from pathlib import Path
 
 from dotenv import load_dotenv
 
 from agents.schema import Evidence, Reference, build_submission
-from agents.aderyn_runner import run_aderyn
+from agents.aderyn_runner import AderynError, run_aderyn
 from agents.slither_runner import run_slither
 from agents.solodit import build_references
 from agents.logic import logic_review
 from agents.progress import ProgressReporter
 from agents.reporting import write_json, write_report
-from agents.triage import extract_findings, triage_findings
+from agents.triage import extract_findings, filter_findings, triage_findings
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -155,6 +156,7 @@ def build_submission_payload(
         description=description,
         impact=impact,
         severity=severity,
+        confidence=confidence,
     )
     if reports_dir:
         write_json("solodit.json", references_payload, reports_dir)
@@ -197,13 +199,28 @@ def run_linear(
     progress: ProgressReporter | None = None,
 ) -> dict:
     findings: list[dict] = []
+    tools_used: list[str] = []
     for tool in tools:
         if tool == "aderyn":
             if progress:
                 progress.start("scan.aderyn", "Running Aderyn")
-            report_json = run_aderyn(solidity_file)
+            try:
+                report_json = run_aderyn(solidity_file)
+            except AderynError as exc:
+                if progress:
+                    progress.complete(
+                        "scan.aderyn",
+                        "Aderyn failed; continuing with remaining tools",
+                    )
+                else:
+                    print(
+                        f"warning: aderyn failed; continuing ({exc})",
+                        file=sys.stderr,
+                    )
+                continue
             write_report("aderyn", report_json, reports_dir)
             findings.extend(extract_findings(report_json, source="aderyn"))
+            tools_used.append("aderyn")
             if progress:
                 progress.complete("scan.aderyn", "Aderyn report ready")
         elif tool == "slither":
@@ -212,19 +229,26 @@ def run_linear(
             report_json = run_slither(solidity_file)
             write_report("slither", report_json, reports_dir)
             findings.extend(extract_findings(report_json, source="slither"))
+            tools_used.append("slither")
             if progress:
                 progress.complete("scan.slither", "Slither report ready")
         else:
             raise ValueError(f"Unknown tool: {tool}")
+    filtered = filter_findings(findings)
     if progress:
         progress.start("extract", "Normalizing findings")
-        progress.complete("extract", f"Extracted {len(findings)} findings")
+        dropped = len(findings) - len(filtered)
+        suffix = f", filtered {dropped}" if dropped > 0 else ""
+        progress.complete(
+            "extract",
+            f"Extracted {len(findings)} findings{suffix}",
+        )
         progress.start("triage", "Ranking findings")
-    triaged = triage_findings(findings, max_issues=max_issues, use_llm=use_llm)
+    triaged = triage_findings(filtered, max_issues=max_issues, use_llm=use_llm)
     if progress:
         progress.complete("triage", f"Selected {len(triaged)} findings")
     if dump_intermediate:
-        write_json("static_analysis_summary.json", findings, reports_dir)
+        write_json("static_analysis_summary.json", filtered, reports_dir)
         write_json("triage.json", triaged, reports_dir)
     api_key = os.getenv("OPENAI_API_KEY")
     ollama_model = os.getenv("OLLAMA_MODEL")
@@ -249,9 +273,9 @@ def run_linear(
         progress.start("finalize", "Building submission")
     submission = build_submission_payload(
         solidity_file=solidity_file,
-        findings=findings,
+        findings=filtered,
         triaged=triaged,
-        static_tools=tools,
+        static_tools=tools_used,
         reports_dir=reports_dir if dump_intermediate else None,
     )
     if progress:
@@ -374,4 +398,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-
