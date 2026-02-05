@@ -45,14 +45,33 @@ contract DeployOpenAudit is Script {
 
         vm.startBroadcast(deployerPrivateKey);
 
-        // Determine if we're on a local network or Sepolia
+        // Determine if we're on a network that has ENS (Sepolia) or requires mocks
+        bool isSepolia = block.chainid == 11155111;
+        bool isBaseSepolia = block.chainid == 84532;
         bool isLocal = block.chainid == 31337;
 
         address erc6551Registry;
         address ensRegistry;
         address ensResolver;
 
-        if (isLocal) {
+        if (isSepolia) {
+            console.log("Deploying to Sepolia with real ENS...");
+            erc6551Registry = ERC6551_REGISTRY;
+            ensRegistry = SEPOLIA_ENS_REGISTRY;
+            ensResolver = SEPOLIA_ENS_RESOLVER;
+        } else if (isBaseSepolia) {
+            console.log("Deploying to Base Sepolia...");
+            // ERC6551 Registry is canonical on Base Sepolia
+            erc6551Registry = ERC6551_REGISTRY;
+            
+            // Deploy mock ENS as it's not natively on Base Sepolia
+            MockENSRegistry mockENS = new MockENSRegistry();
+            MockENSResolver mockResolver = new MockENSResolver();
+            ensRegistry = address(mockENS);
+            ensResolver = address(mockResolver);
+            console.log("MockENSRegistry deployed on Base:", ensRegistry);
+            console.log("MockENSResolver deployed on Base:", ensResolver);
+        } else if (isLocal) {
             console.log("Deploying to local network with mocks...");
             
             // Deploy mock ERC-6551 registry
@@ -67,11 +86,6 @@ contract DeployOpenAudit is Script {
             ensResolver = address(mockResolver);
             console.log("MockENSRegistry deployed:", ensRegistry);
             console.log("MockENSResolver deployed:", ensResolver);
-        } else {
-            console.log("Deploying to Sepolia with real contracts...");
-            erc6551Registry = ERC6551_REGISTRY;
-            ensRegistry = SEPOLIA_ENS_REGISTRY;
-            ensResolver = SEPOLIA_ENS_RESOLVER;
         }
 
         // 1. Deploy ERC6551Account implementation
@@ -106,8 +120,8 @@ contract DeployOpenAudit is Script {
         agentRegistry.setAuthorizedCaller(address(bountyHive), true);
         console.log("Permissions configured");
 
-        // 6. If local, set up ENS parent node ownership
-        if (isLocal) {
+        // 6. If using mocks, set up ENS parent node ownership
+        if (isLocal || isBaseSepolia) {
             MockENSRegistry(ensRegistry).setNodeOwner(PARENT_NODE, address(agentRegistry));
             console.log("ENS parent node ownership set");
         }
