@@ -127,7 +127,7 @@ contract DeployOpenAudit is Script {
         }
 
         // 7. Transfer BountyHive ownership to judge
-        if (judgeAddress != deployer) {
+        if (judgeAddress != deployer && judgeAddress != address(0)) {
             bountyHive.transferOwnership(judgeAddress);
             console.log("BountyHive ownership transferred to judge");
         }
