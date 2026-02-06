@@ -114,6 +114,15 @@ def _build_eth_account_wallet_provider() -> Any:
             )
         chain_id = str(chain.id)
 
+    # Check if this is a local network (Anvil uses 31337)
+    # coinbase-agentkit doesn't support local networks
+    if chain_id in ("31337", "1337") or (rpc_url and "localhost" in rpc_url.lower() or "127.0.0.1" in rpc_url):
+        raise WalletInitError(
+            f"coinbase-agentkit does not support local networks (chain ID {chain_id}). "
+            "For local development, use --no-wallet-tools flag. "
+            "The register_agent and check_registration tools use web3 directly and work on local networks."
+        )
+
     account = Account.from_key(private_key)
     if EthAccountWalletProviderConfig is None:
         raise WalletInitError("EthAccountWalletProviderConfig is unavailable.")
@@ -122,7 +131,16 @@ def _build_eth_account_wallet_provider() -> Any:
         chain_id=str(chain_id),
         rpc_url=rpc_url,
     )
-    return EthAccountWalletProvider(config)
+    try:
+        return EthAccountWalletProvider(config)
+    except (KeyError, ValueError) as exc:
+        # Handle case where chain_id is not recognized by coinbase-agentkit
+        raise WalletInitError(
+            f"coinbase-agentkit does not recognize chain ID {chain_id}. "
+            "This may be a local or unsupported network. "
+            "For local development, use --no-wallet-tools flag. "
+            f"Original error: {exc}"
+        ) from exc
 
 
 def _select_wallet_provider() -> Any:

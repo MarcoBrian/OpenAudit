@@ -7,8 +7,6 @@ from typing import Any, Dict, List
 
 import requests
 
-from agents.ollama_client import call_ollama
-
 
 def _truncate(text: str, limit: int = 8000) -> str:
     if len(text) <= limit:
@@ -83,6 +81,8 @@ def logic_review(
                 base_url=base_url,
                 model=model,
             )
+        # Lazy import to avoid import errors when ollama is not available
+        from agents.ollama_client import call_ollama
         return call_ollama(prompt=prompt, model=ollama_model)
-    except (requests.RequestException, ValueError):
+    except (requests.RequestException, ValueError, ImportError, RuntimeError):
         return []

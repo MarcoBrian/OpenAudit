@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -17,7 +18,16 @@ from agents.reporting import write_json, write_report
 from agents.triage import extract_findings, filter_findings, triage_findings
 from agents.graph import run_workflow
 from agents.wallet import WalletInitError, get_wallet_details
-from agents.langchain_agent import run_agent
+
+# Lazy import of langchain_agent - it's slow to import
+def _import_langchain_agent():
+    """Lazy import to avoid slow LangChain imports when not needed."""
+    print("  - Loading agent runtime modules (this may take a few seconds)...", flush=True)
+    import_start = time.time()
+    from agents.langchain_agent import run_agent
+    import_time = time.time() - import_start
+    print(f"    Agent runtime loaded ({import_time:.2f}s)", flush=True)
+    return run_agent
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -274,9 +284,25 @@ def run_graph(
 
 
 def main() -> int:
-    load_dotenv()
+    import time
+    start_time = time.time()
+    
+    print("Starting OpenAudit agent...", flush=True)
+    
+    try:
+        load_dotenv(override=False)  # Don't override existing env vars
+    except Exception as exc:
+        # Handle .env parsing errors gracefully
+        # This can happen if .env has syntax errors or variable resolution issues
+        print(f"Warning: Could not parse .env file: {exc}", file=sys.stderr)
+        print("Continuing - environment variables may be set via system or command line.", file=sys.stderr)
+    
     args = build_parser().parse_args()
     command = args.command or "run"
+    
+    if command == "agent":
+        # For agent command, we know we'll need langchain - print early
+        print("Loading agent runtime (this may take a few seconds)...", flush=True)
 
     if command == "scan":
         solidity_file = Path(args.file)
@@ -350,6 +376,8 @@ def main() -> int:
         return 0
 
     if command == "agent":
+        # Lazy import - only load langchain_agent when actually needed
+        run_agent = _import_langchain_agent()
         return run_agent(
             mode=args.mode,
             include_wallet_tools=not args.no_wallet_tools,
