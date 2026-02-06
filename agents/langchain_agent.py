@@ -105,7 +105,8 @@ class AgentRuntimeError(RuntimeError):
 
 
 DEFAULT_AGENT_SYSTEM_PROMPT = (
-    "You are OpenAudit's autonomous agent. "
+    "You are OpenAudit's autonomous agent (the agent itself, not a third-party service). "
+    "You must register yourself in the AgentRegistry to submit bounties and earn rewards. "
     "IMPORTANT: When users ask to register the agent, you MUST use the register_agent tool. "
     "Do not just explain how to register - actually call the tool.\n\n"
     "Available tools:\n"
@@ -118,14 +119,17 @@ DEFAULT_AGENT_SYSTEM_PROMPT = (
     "- User: 'Register me' → Use register_agent tool\n"
     "- User: 'Sign up the agent' → Use register_agent tool\n"
     "- User: 'Check if I'm registered' → Use check_registration tool\n"
+    "- User: 'How do I submit a bounty?' → Explain that registration is required and offer to register now\n"
     "Keep responses concise and actionable. Always use tools when appropriate."
 )
 
 DEFAULT_CHAT_SYSTEM_PROMPT = (
-    "You are OpenAudit's assistant. "
-    "Explain that the agent can run Solidity audits using Aderyn and Slither, "
-    "triage findings, optionally perform an LLM logic review, and produce a JSON submission. "
-    "It can also register and check agents on-chain. "
+    "You are the OpenAudit agent. You are responsible for self-registering and "
+    "self-checking your registration in the AgentRegistry so you can submit bounties and earn rewards. "
+    "You can run Solidity audits using Aderyn and Slither, triage findings, optionally perform an LLM "
+    "logic review, and produce a JSON submission. "
+    "If the user asks about bounties, rewards, or submissions, state clearly that you (the agent) must be "
+    "registered first and offer to register yourself. "
     "Be clear, concise, and actionable. When the user asks for an action, "
     "the system will execute tools separately, so focus on guidance and missing inputs."
 )
@@ -155,6 +159,7 @@ _REGISTER_ACTION_PHRASES = (
     "register the agent",
     "register me",
     "register agent",
+    "register yourself",
     "sign up the agent",
     "sign up",
     "sign-up",
@@ -186,6 +191,22 @@ _AUDIT_ACTION_PHRASES = (
 )
 
 _AUDIT_CONTEXT_HINTS = ("contract", "solidity", "smart contract", ".sol")
+
+_REGISTER_CONTEXT_HINTS = ("agent", "registry", "openaudit", "tba", "ens")
+
+_INTENT_ROUTER_PROMPT = (
+    "You are a routing classifier for the OpenAudit agent. Decide whether the user is asking to "
+    "perform an action right now. Return strict JSON only, with keys: action, params, confidence.\n"
+    "Valid actions: run_audit, register_agent, check_registration, none.\n"
+    "Use action=none for explanations, questions, or if you are unsure.\n"
+    "Only choose register_agent if the user explicitly asks to register now (self-register). "
+    "Only choose check_registration if the user asks to check registration status. "
+    "Only choose run_audit if the user asks to run an audit now.\n"
+    "params should include: file for run_audit if present; agent_name/agent_id/tba_address for "
+    "check_registration if present; agent_name for register_agent if provided.\n"
+    "confidence must be a number between 0 and 1.\n"
+    "Output JSON only. Example: {\"action\":\"check_registration\",\"params\":{\"agent_name\":\"agent-local-test\"},\"confidence\":0.78}"
+)
 
 class ActionIntent(TypedDict):
     action: str
@@ -228,6 +249,47 @@ def _parse_key_value_args(text: str) -> Dict[str, str]:
             key, value = token.split("=", 1)
             params[key.strip()] = value.strip().strip("`\"'")
     return params
+
+
+def _extract_agent_name(text: str) -> Optional[str]:
+    raw = text.strip()
+    if not raw:
+        return None
+
+    patterns = (
+        r"check\s+(?:whether|if)\s+['\"]?([\w\-]+)['\"]?\s+is\s+registered",
+        r"check(?: registration)?(?: for)?\s+['\"]?([\w\-]+)['\"]?(?:\s+if\s+registered)?",
+        r"verify(?: registration)?(?: for)?\s+['\"]?([\w\-]+)['\"]?(?:\s+if\s+registered)?",
+        r"is\s+['\"]?([\w\-]+)['\"]?\s+(?:already\s+)?registered",
+        r"registered\s+for\s+['\"]?([\w\-]+)['\"]?",
+        r"agent\s+['\"]?([\w\-]+)['\"]?\s+(?:registered|registration|status)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            candidate = match.group(1).strip().strip("`\"'")
+            if candidate and candidate not in {"me", "i", "we", "us", "my", "our", "this", "that", "it", "whether", "if"}:
+                return candidate
+    return None
+
+
+def _extract_register_agent_name(text: str) -> Optional[str]:
+    raw = text.strip()
+    if not raw:
+        return None
+
+    patterns = (
+        r"register(?:\s+\w+)*\s+as\s+['\"]?([\w\-]+)['\"]?",
+        r"register\s+['\"]?([\w\-]+)['\"]?\s+as",
+        r"(?:agent\s+name|name)\s*[:=]?\s*['\"]?([\w\-]+)['\"]?",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            candidate = match.group(1).strip().strip("`\"'")
+            if candidate and candidate not in {"me", "i", "we", "us", "my", "our", "this", "that", "it", "yourself"}:
+                return candidate
+    return None
 
 
 def _coerce_bool(value: Any, default: bool) -> bool:
@@ -276,17 +338,47 @@ def _detect_action_intent(text: str) -> Optional[ActionIntent]:
     register_word = re.search(r"\bregister\b", cleaned) is not None
     sign_up_word = "sign up" in cleaned or "sign-up" in cleaned or "signup" in cleaned
     enroll_word = re.search(r"\benroll\b", cleaned) is not None
+    register_context = _contains_any(cleaned, _REGISTER_CONTEXT_HINTS)
+    self_register = re.search(r"\bregister\b.*\b(yourself|myself|self)\b", cleaned) is not None
+    register_imperative = re.match(r"^(ok\s+|okay\s+|please\s+|go\s+)?register\b", cleaned) is not None
+    is_registered_question = re.search(r"\bis\s+['\"]?[\w\-]+['\"]?\s+registered\b", cleaned) is not None
     check_word = re.search(r"\bregistered\b", cleaned) is not None and (
-        "am i" in cleaned or "are we" in cleaned or "check" in cleaned or "status" in cleaned
+        "am i" in cleaned
+        or "are we" in cleaned
+        or "are you" in cleaned
+        or "is " in cleaned
+        or "check" in cleaned
+        or "status" in cleaned
+        or is_registered_question
     )
 
     if explicit_check or _contains_any(cleaned, _CHECK_ACTION_PHRASES):
+        if not any(key in params for key in ("agent_name", "agent_id", "tba_address")):
+            candidate = _extract_agent_name(text)
+            if candidate:
+                params["agent_name"] = candidate
         return {"action": "check_registration", "params": params}
 
     if check_word:
+        if not any(key in params for key in ("agent_name", "agent_id", "tba_address")):
+            candidate = _extract_agent_name(text)
+            if candidate:
+                params["agent_name"] = candidate
         return {"action": "check_registration", "params": params}
 
-    if explicit_register or _contains_any(cleaned, _REGISTER_ACTION_PHRASES) or register_word or sign_up_word or enroll_word:
+    if (
+        explicit_register
+        or _contains_any(cleaned, _REGISTER_ACTION_PHRASES)
+        or self_register
+        or (register_word and register_context)
+        or (sign_up_word and register_context)
+        or (enroll_word and register_context)
+        or register_imperative
+    ):
+        if "agent_name" not in params:
+            candidate = _extract_register_agent_name(text)
+            if candidate:
+                params["agent_name"] = candidate
         return {"action": "register_agent", "params": params}
 
     audit_context = _contains_any(cleaned, _AUDIT_CONTEXT_HINTS)
@@ -296,6 +388,47 @@ def _detect_action_intent(text: str) -> Optional[ActionIntent]:
         return {"action": "run_audit", "params": params}
 
     return None
+
+
+def _classify_intent_with_llm(text: str, llm: Any) -> Optional[ActionIntent]:
+    normalized = _normalize_text(text)
+    if not normalized or _is_info_intent(normalized):
+        return None
+
+    try:
+        response = llm.invoke(
+            [
+                SystemMessage(content=_INTENT_ROUTER_PROMPT),
+                HumanMessage(content=text),
+            ]
+        )
+    except Exception:
+        return None
+
+    content = response.content if hasattr(response, "content") else str(response)
+    payload = _extract_json_payload(str(content))
+    if not payload:
+        return None
+
+    action = payload.get("action")
+    if action == "none" or action is None:
+        return None
+    if action not in {"run_audit", "register_agent", "check_registration"}:
+        return None
+
+    confidence = payload.get("confidence", 0)
+    try:
+        confidence_value = float(confidence)
+    except (TypeError, ValueError):
+        confidence_value = 0.0
+    if confidence_value < 0.6:
+        return None
+
+    params = payload.get("params") or {}
+    if not isinstance(params, dict):
+        params = {}
+
+    return {"action": action, "params": params}
 
 
 def _require_langchain() -> None:
@@ -999,6 +1132,7 @@ def _build_prompt(system_prompt: str | None = None) -> ChatPromptTemplate:
     tool_instructions = (
         "You have access to the following tools:\n{tools}\n\n"
         "Tool names: {tool_names}\n\n"
+        "You are the agent itself. Registration is for THIS agent's on-chain identity.\n\n"
         "CRITICAL: When a user asks to register the agent, you MUST call the register_agent tool. "
         "Do not just explain - actually execute the registration.\n\n"
         "Tool input formats:\n"
@@ -1154,6 +1288,13 @@ def run_chat_mode(agent_executor: Any, system_prompt: str | None = None) -> int:
                 return 0
 
             intent = _detect_action_intent(user_input)
+            if intent is None:
+                try:
+                    llm = _ensure_chat_llm()
+                    intent = _classify_intent_with_llm(user_input, llm)
+                except Exception:
+                    intent = None
+
             if intent is not None:
                 action = intent["action"]
                 params = dict(intent["params"])
@@ -1179,6 +1320,10 @@ def run_chat_mode(agent_executor: Any, system_prompt: str | None = None) -> int:
                 if action == "register_agent":
                     allowed = {"metadata_uri", "agent_name", "initial_operator"}
                     params = {key: value for key, value in params.items() if key in allowed}
+                    if "agent_name" not in params:
+                        candidate = _extract_register_agent_name(user_input)
+                        if candidate:
+                            params["agent_name"] = candidate
                     try:
                         output = _register_agent_impl(**params)
                     except Exception as exc:
@@ -1190,6 +1335,10 @@ def run_chat_mode(agent_executor: Any, system_prompt: str | None = None) -> int:
                 if action == "check_registration":
                     allowed = {"agent_name", "agent_id", "tba_address"}
                     params = {key: value for key, value in params.items() if key in allowed}
+                    if not any(key in params for key in ("agent_name", "agent_id", "tba_address")):
+                        candidate = _extract_agent_name(user_input)
+                        if candidate:
+                            params["agent_name"] = candidate
                     try:
                         output = _check_registration_impl(**params)
                     except Exception as exc:
