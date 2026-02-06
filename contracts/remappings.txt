@@ -1,0 +1,4 @@
+@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/
+erc6551/=lib/reference/src/
+@ensdomains/ens-contracts/=lib/ens-contracts/contracts/
+forge-std/=lib/forge-std/src/
