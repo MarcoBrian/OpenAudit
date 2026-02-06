@@ -56,14 +56,6 @@ except ImportError as exc:  # pragma: no cover - optional dependency
     ChatOllama = None  # type: ignore[assignment]
     _LANGCHAIN_IMPORT_ERROR = exc
 
-try:
-    from coinbase_agentkit_langchain import get_langchain_tools
-except ImportError as exc:  # pragma: no cover - optional dependency
-    get_langchain_tools = None  # type: ignore[assignment]
-    _AGENTKIT_LC_IMPORT_ERROR = exc
-else:
-    _AGENTKIT_LC_IMPORT_ERROR = None
-
 from agents.aderyn_runner import AderynError, run_aderyn
 from agents.logic import logic_review
 from agents.progress import ProgressReporter
@@ -272,17 +264,20 @@ def _build_tools(include_wallet_tools: bool) -> List[BaseTool]:
     if not include_wallet_tools:
         return tools
 
-    if get_langchain_tools is None:
-        raise AgentRuntimeError(
-            "coinbase-agentkit-langchain is not installed. "
-            "Install it with: pip install coinbase-agentkit-langchain"
-        ) from _AGENTKIT_LC_IMPORT_ERROR
-
     try:
+        # Lazy import to avoid importing coinbase_agentkit_langchain (and its
+        # nest_asyncio side effects) when wallet tools are not needed.
+        from coinbase_agentkit_langchain import get_langchain_tools
+
         agentkit = create_agentkit()
     except WalletInitError as exc:
         print(f"warning: wallet disabled ({exc})", file=sys.stderr)
         return tools
+    except ImportError as exc:
+        raise AgentRuntimeError(
+            "coinbase-agentkit-langchain is not installed. "
+            "Install it with: pip install coinbase-agentkit-langchain"
+        ) from exc
 
     tools.extend(get_langchain_tools(agentkit))
     return tools
