@@ -101,6 +101,15 @@ def _add_analysis_args(parser: argparse.ArgumentParser) -> None:
     )
 
 
+def _registry_env_default() -> str | None:
+    return (
+        os.getenv("OPENAUDIT_REGISTRY_ADDRESS")
+        or os.getenv("OPENAUDIT_REGISTRY")
+        or os.getenv("BOUNTY_HIVE_ADDRESS")
+        or os.getenv("BOUNTY_HIVE")
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="OpenAudit Agent MVP")
     subparsers = parser.add_subparsers(dest="command")
@@ -201,19 +210,29 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the default agent system prompt",
     )
 
-    bounty_parser = subparsers.add_parser("bounty", help="Query bounties and analyze targets")
+    bounty_parser = subparsers.add_parser(
+        "bounty", help="Query bounties and analyze targets"
+    )
     bounty_subparsers = bounty_parser.add_subparsers(dest="bounty_command")
 
-    bounty_list = bounty_subparsers.add_parser("list", help="List bounties from BountyHive")
+    bounty_list = bounty_subparsers.add_parser(
+        "list", help="List bounties from OpenAuditRegistry"
+    )
     bounty_list.add_argument(
         "--rpc-url",
         default=os.getenv("RPC_URL"),
         help="RPC URL for the chain (env: RPC_URL)",
     )
     bounty_list.add_argument(
+        "--registry",
+        "--registry-address",
         "--bounty-hive",
-        default=os.getenv("BOUNTY_HIVE"),
-        help="BountyHive contract address (env: BOUNTY_HIVE)",
+        dest="registry_address",
+        default=_registry_env_default(),
+        help=(
+            "OpenAuditRegistry address (env: OPENAUDIT_REGISTRY_ADDRESS; "
+            "legacy: BOUNTY_HIVE)"
+        ),
     )
     bounty_list.add_argument(
         "--limit",
@@ -231,9 +250,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="RPC URL for the chain (env: RPC_URL)",
     )
     bounty_analyze.add_argument(
+        "--registry",
+        "--registry-address",
         "--bounty-hive",
-        default=os.getenv("BOUNTY_HIVE"),
-        help="BountyHive contract address (env: BOUNTY_HIVE)",
+        dest="registry_address",
+        default=_registry_env_default(),
+        help=(
+            "OpenAuditRegistry address (env: OPENAUDIT_REGISTRY_ADDRESS; "
+            "legacy: BOUNTY_HIVE)"
+        ),
     )
     bounty_analyze.add_argument(
         "--bounty-id",
@@ -254,7 +279,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_analysis_args(bounty_analyze)
 
     bounty_submit = bounty_subparsers.add_parser(
-        "submit", help="Commit and reveal a bounty finding"
+        "submit", help="Submit a bounty finding"
     )
     bounty_submit.add_argument(
         "--rpc-url",
@@ -262,19 +287,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="RPC URL for the chain (env: RPC_URL)",
     )
     bounty_submit.add_argument(
+        "--registry",
+        "--registry-address",
         "--bounty-hive",
-        default=os.getenv("BOUNTY_HIVE"),
-        help="BountyHive contract address (env: BOUNTY_HIVE)",
+        dest="registry_address",
+        default=_registry_env_default(),
+        help=(
+            "OpenAuditRegistry address (env: OPENAUDIT_REGISTRY_ADDRESS; "
+            "legacy: BOUNTY_HIVE)"
+        ),
     )
     bounty_submit.add_argument(
         "--private-key",
         default=os.getenv("BOUNTY_SUBMITTER_PRIVATE_KEY"),
-        help="Private key for the submitter TBA (env: BOUNTY_SUBMITTER_PRIVATE_KEY)",
-    )
-    bounty_submit.add_argument(
-        "--submitter",
-        required=True,
-        help="Submitter TBA address",
+        help="Private key for the submitter wallet (env: BOUNTY_SUBMITTER_PRIVATE_KEY)",
     )
     bounty_submit.add_argument(
         "--bounty-id",
@@ -288,20 +314,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Report CID (e.g. IPFS CID)",
     )
     bounty_submit.add_argument(
-        "--poc-cid",
-        required=True,
-        help="PoC test CID (e.g. IPFS CID)",
-    )
-    bounty_submit.add_argument(
-        "--salt",
-        type=int,
-        required=True,
-        help="Salt used to create the commitment hash",
-    )
-    bounty_submit.add_argument(
-        "--skip-commit",
-        action="store_true",
-        help="Skip commit step and only reveal",
+        "--submitter",
+        default=None,
+        help="Optional: expected submitter address (sanity check)",
     )
 
     return parser
@@ -526,14 +541,20 @@ def main() -> int:
 
     if command == "bounty":
         from agents.bounty_discovery import (
-            BountyClient,
+            RegistryClient,
             load_source_from_etherscan,
             load_source_from_map,
         )
         from agents.bounty_submission import BountySubmissionClient
 
+        registry_address = args.registry_address
+        if not registry_address:
+            raise ValueError(
+                "Provide --registry-address or set OPENAUDIT_REGISTRY_ADDRESS."
+            )
+
         if args.bounty_command == "list":
-            client = BountyClient(args.rpc_url, args.bounty_hive)
+            client = RegistryClient(args.rpc_url, registry_address)
             total = client.total_bounties()
             limit = min(total, args.limit)
             payload = []
@@ -544,7 +565,7 @@ def main() -> int:
             return 0
 
         if args.bounty_command == "analyze":
-            client = BountyClient(args.rpc_url, args.bounty_hive)
+            client = RegistryClient(args.rpc_url, registry_address)
             bounty = client.get_bounty(args.bounty_id)
             if args.use_etherscan:
                 solidity_file = load_source_from_etherscan(bounty.target_contract)
@@ -583,31 +604,30 @@ def main() -> int:
 
         if args.bounty_command == "submit":
             if not args.private_key:
-                raise ValueError("Provide --private-key or set BOUNTY_SUBMITTER_PRIVATE_KEY.")
-            submitter_client = BountySubmissionClient(args.rpc_url, args.bounty_hive)
-            report_hash = submitter_client.compute_commitment_hash(
-                args.submitter,
-                args.report_cid,
-                args.salt,
-            )
-            payload: dict[str, str] = {"commitment_hash": report_hash.hex()}
-            if not args.skip_commit:
-                payload["commit_tx"] = submitter_client.commit_finding(
-                    private_key=args.private_key,
-                    bounty_id=args.bounty_id,
-                    report_hash=report_hash,
+                raise ValueError(
+                    "Provide --private-key or set BOUNTY_SUBMITTER_PRIVATE_KEY."
                 )
-            payload["reveal_tx"] = submitter_client.reveal_finding(
+            submitter_client = BountySubmissionClient(args.rpc_url, registry_address)
+            derived_address = submitter_client.web3.eth.account.from_key(
+                args.private_key
+            ).address
+            if args.submitter and args.submitter.lower() != derived_address.lower():
+                raise ValueError(
+                    "Submitter address does not match provided private key."
+                )
+            tx_hash = submitter_client.submit_finding(
                 private_key=args.private_key,
                 bounty_id=args.bounty_id,
                 report_cid=args.report_cid,
-                poc_cid=args.poc_cid,
-                salt=args.salt,
             )
+            payload = {
+                "submitter": derived_address,
+                "submit_tx": tx_hash,
+            }
             print(json.dumps(payload, indent=2))
             return 0
 
-        raise ValueError("Missing bounty subcommand (list/analyze).")
+        raise ValueError("Missing bounty subcommand (list/analyze/submit).")
 
     solidity_file = Path(args.file)
     tools = [tool.strip().lower() for tool in args.tools.split(",") if tool.strip()]

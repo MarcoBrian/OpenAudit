@@ -10,10 +10,10 @@ import requests
 from web3 import Web3
 
 
-BOUNTY_HIVE_ABI = [
+OPENAUDIT_REGISTRY_ABI = [
     {
         "inputs": [],
-        "name": "totalBounties",
+        "name": "nextBountyId",
         "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
         "stateMutability": "view",
         "type": "function",
@@ -25,11 +25,10 @@ BOUNTY_HIVE_ABI = [
             {"internalType": "address", "name": "sponsor", "type": "address"},
             {"internalType": "address", "name": "targetContract", "type": "address"},
             {"internalType": "uint256", "name": "reward", "type": "uint256"},
-            {"internalType": "uint256", "name": "createdAt", "type": "uint256"},
             {"internalType": "uint256", "name": "deadline", "type": "uint256"},
-            {"internalType": "uint8", "name": "status", "type": "uint8"},
-            {"internalType": "address", "name": "winnerTBA", "type": "address"},
-            {"internalType": "uint8", "name": "resolvedSeverity", "type": "uint8"},
+            {"internalType": "bool", "name": "active", "type": "bool"},
+            {"internalType": "bool", "name": "resolved", "type": "bool"},
+            {"internalType": "address", "name": "winner", "type": "address"},
         ],
         "stateMutability": "view",
         "type": "function",
@@ -43,52 +42,54 @@ class BountyDetails:
     sponsor: str
     target_contract: str
     reward_wei: int
-    created_at: int
     deadline: int
-    status: int
-    winner_tba: str
-    resolved_severity: int
+    active: bool
+    resolved: bool
+    winner: str
 
 
-class BountyClient:
-    def __init__(self, rpc_url: str, bounty_hive: str) -> None:
+class RegistryClient:
+    def __init__(self, rpc_url: str, registry_address: str) -> None:
         if not rpc_url:
-            raise ValueError("RPC URL is required to access BountyHive.")
-        if not bounty_hive:
-            raise ValueError("BountyHive address is required.")
+            raise ValueError("RPC URL is required to access OpenAuditRegistry.")
+        if not registry_address:
+            raise ValueError("OpenAuditRegistry address is required.")
         self.web3 = Web3(Web3.HTTPProvider(rpc_url))
         if not self.web3.is_connected():
             raise ConnectionError("Unable to connect to RPC endpoint.")
         self.contract = self.web3.eth.contract(
-            address=self.web3.to_checksum_address(bounty_hive),
-            abi=BOUNTY_HIVE_ABI,
+            address=self.web3.to_checksum_address(registry_address),
+            abi=OPENAUDIT_REGISTRY_ABI,
         )
 
     def total_bounties(self) -> int:
-        return int(self.contract.functions.totalBounties().call())
+        next_id = int(self.contract.functions.nextBountyId().call())
+        return max(0, next_id - 1)
 
     def get_bounty(self, bounty_id: int) -> BountyDetails:
         (
             sponsor,
             target_contract,
             reward,
-            created_at,
             deadline,
-            status,
-            winner_tba,
-            resolved_severity,
+            active,
+            resolved,
+            winner,
         ) = self.contract.functions.bounties(bounty_id).call()
         return BountyDetails(
             bounty_id=bounty_id,
             sponsor=sponsor,
             target_contract=target_contract,
             reward_wei=int(reward),
-            created_at=int(created_at),
             deadline=int(deadline),
-            status=int(status),
-            winner_tba=winner_tba,
-            resolved_severity=int(resolved_severity),
+            active=bool(active),
+            resolved=bool(resolved),
+            winner=winner,
         )
+
+
+# Backwards-compatible alias
+BountyClient = RegistryClient
 
 
 def load_source_from_map(target_contract: str, source_map_path: Path) -> Path:

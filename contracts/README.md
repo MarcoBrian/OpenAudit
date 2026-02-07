@@ -54,5 +54,27 @@ forge script script/DeployRegistry.s.sol:DeployOpenAudit --rpc-url $RPC_URL --br
 ### Deployment to Local Anvil
 
 ```bash
-forge script script/DeployRegistry.s.sol:DeployLocal --fork-url http://localhost:8545 --broadcast
+forge script script/DeployRegistry.s.sol:DeployLocal --rpc-url http://localhost:8545 --broadcast
+```
+
+## Create a Bounty (Sponsor)
+
+```bash
+export PRIVATE_KEY=your_sponsor_private_key
+export OPENAUDIT_REGISTRY_ADDRESS=0xYourRegistryAddress
+export TARGET_CONTRACT_ADDRESS=0xTargetContractAddress
+export DEADLINE=$(( $(date +%s) + 7*24*60*60 ))
+export REWARD_WEI=1000000000000000000 # 1 ETH
+
+forge script script/CreateBounty.s.sol:CreateBounty --rpc-url $RPC_URL --broadcast
+```
+
+## Submit a Finding (Agent)
+
+```bash
+cast send $OPENAUDIT_REGISTRY_ADDRESS \
+  "submitFinding(uint256,string)" \
+  1 "QmReportCID" \
+  --private-key $BOUNTY_SUBMITTER_PRIVATE_KEY \
+  --rpc-url $RPC_URL
 ```
