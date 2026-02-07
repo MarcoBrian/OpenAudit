@@ -286,7 +286,7 @@ contract OpenAuditTest is Test {
 
         // 3-4. Commit and reveal finding
         string memory reportCID = "QmReportCID123";
-        _commitAndRevealFinding(tba, bountyId, reportCID, "QmPocTestCID456", 12345);
+        _commitAndRevealFinding(tba, bountyId, reportCID, "QmPocTestCID456");
 
         // 5. Judge resolves the bounty
         uint256 tbaBalanceBefore = tba.balance;
@@ -309,16 +309,13 @@ contract OpenAuditTest is Test {
         address tba,
         uint256 bountyId,
         string memory reportCID,
-        string memory pocTestCID,
-        uint256 salt
+        string memory pocTestCID
     ) internal {
-        bytes32 commitHash = bountyHive.computeCommitmentHash(tba, reportCID, salt);
+        vm.prank(tba);
+        bountyHive.commitFinding(bountyId, reportCID);
 
         vm.prank(tba);
-        bountyHive.commitFinding(bountyId, commitHash);
-
-        vm.prank(tba);
-        bountyHive.revealFinding(bountyId, reportCID, pocTestCID, salt);
+        bountyHive.revealFinding(bountyId, pocTestCID);
     }
 
     function _verifyBountyResolved(uint256 bountyId, address expectedWinner) internal view {
@@ -371,14 +368,12 @@ contract OpenAuditTest is Test {
 
         // Agent commits and reveals a spam finding
         string memory reportCID = "QmSpamReport";
-        uint256 salt = 99999;
-        bytes32 commitHash = bountyHive.computeCommitmentHash(tba, reportCID, salt);
 
         vm.prank(tba);
-        bountyHive.commitFinding(bountyId, commitHash);
+        bountyHive.commitFinding(bountyId, reportCID);
 
         vm.prank(tba);
-        bountyHive.revealFinding(bountyId, reportCID, "QmFakePoC", salt);
+        bountyHive.revealFinding(bountyId, "QmFakePoC");
 
         // Judge marks as spam
         vm.prank(judge);
@@ -433,20 +428,10 @@ contract OpenAuditTest is Test {
         );
         vm.stopPrank();
 
-        // Commit with one CID
-        bytes32 commitHash = bountyHive.computeCommitmentHash(tba, "QmCorrectCID", 123);
+        // Try to reveal without committing first
         vm.prank(tba);
-        bountyHive.commitFinding(bountyId, commitHash);
-
-        // Try to reveal with different CID
-        vm.prank(tba);
-        vm.expectRevert(BountyHive.InvalidReveal.selector);
-        bountyHive.revealFinding(bountyId, "QmWrongCID", "QmPoC", 123);
-
-        // Try to reveal with wrong salt
-        vm.prank(tba);
-        vm.expectRevert(BountyHive.InvalidReveal.selector);
-        bountyHive.revealFinding(bountyId, "QmCorrectCID", "QmPoC", 456);
+        vm.expectRevert(BountyHive.CommitmentNotFound.selector);
+        bountyHive.revealFinding(bountyId, "QmPoC");
     }
 
     function test_DoubleReveal() public {
@@ -468,17 +453,16 @@ contract OpenAuditTest is Test {
         vm.stopPrank();
 
         // Commit and reveal
-        bytes32 commitHash = bountyHive.computeCommitmentHash(tba, "QmCID", 123);
         vm.prank(tba);
-        bountyHive.commitFinding(bountyId, commitHash);
+        bountyHive.commitFinding(bountyId, "QmCID");
 
         vm.prank(tba);
-        bountyHive.revealFinding(bountyId, "QmCID", "QmPoC", 123);
+        bountyHive.revealFinding(bountyId, "QmPoC");
 
         // Try to reveal again
         vm.prank(tba);
         vm.expectRevert(BountyHive.CommitmentAlreadyRevealed.selector);
-        bountyHive.revealFinding(bountyId, "QmCID", "QmPoC", 123);
+        bountyHive.revealFinding(bountyId, "QmPoC");
     }
 
     function test_NonAgentCannotCommit() public {
@@ -493,7 +477,7 @@ contract OpenAuditTest is Test {
         // Try to commit from non-agent address
         vm.prank(address(999));
         vm.expectRevert(BountyHive.NotRegisteredAgent.selector);
-        bountyHive.commitFinding(bountyId, bytes32("test"));
+        bountyHive.commitFinding(bountyId, "QmTestCID");
     }
 
     // ═══════════════════════════════════════════════════════════════════════════

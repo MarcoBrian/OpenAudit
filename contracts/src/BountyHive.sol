@@ -43,17 +43,17 @@ contract BountyHive is Ownable, ReentrancyGuard {
     }
 
     struct Commitment {
-        bytes32 hash;               // keccak256(tbaAddress, reportCID, salt)
+        string reportCID;           // IPFS CID of the report
         uint256 bountyId;           // The bounty this commitment is for
         uint256 timestamp;          // When committed
-        bool revealed;              // Whether revealed
+        bool revealed;              // Whether PoC was revealed
     }
 
     struct Finding {
         address submitter;          // Who submitted (TBA address)
         string reportCID;           // IPFS CID of the report
         string pocTestCID;          // IPFS CID of the Foundry PoC test
-        uint256 revealedAt;         // When revealed
+        uint256 revealedAt;         // When PoC was revealed
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -73,7 +73,7 @@ contract BountyHive is Ownable, ReentrancyGuard {
     event FindingCommitted(
         uint256 indexed bountyId,
         address indexed submitter,
-        bytes32 commitmentHash
+        string reportCID
     );
 
     event FindingRevealed(
@@ -107,6 +107,7 @@ contract BountyHive is Ownable, ReentrancyGuard {
     error InvalidWinner();
     error NotRegisteredAgent();
     error TransferFailed();
+    error EmptyCID();
 
     // ═══════════════════════════════════════════════════════════════════════════
     // STATE
@@ -135,6 +136,9 @@ contract BountyHive is Ownable, ReentrancyGuard {
 
     /// @notice Array of submitters per bounty (for enumeration)
     mapping(uint256 => address[]) public bountySubmitters;
+
+    /// @notice Mapping from submitter address to array of CIDs they submitted
+    mapping(address => string[]) public submitterReportCIDs;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // CONSTRUCTOR
@@ -218,15 +222,17 @@ contract BountyHive is Ownable, ReentrancyGuard {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * @notice Commits a finding hash (Phase 1 of commit-reveal)
-     * @dev reportHash = keccak256(abi.encodePacked(tbaAddress, reportCID, salt))
+     * @notice Commits a finding with its IPFS report CID (Phase 1)
+     * @dev The CID is stored on-chain, correlated with msg.sender for ownership tracking
      * @param bountyId The bounty ID
-     * @param reportHash The hash of the report
+     * @param reportCID The IPFS CID of the report (obtained by pinning to IPFS first)
      */
     function commitFinding(
         uint256 bountyId,
-        bytes32 reportHash
+        string calldata reportCID
     ) external {
+        if (bytes(reportCID).length == 0) revert EmptyCID();
+
         Bounty storage bounty = bounties[bountyId];
         if (bounty.sponsor == address(0)) revert BountyNotFound();
         if (bounty.status != BountyStatus.Active) revert BountyNotActive();
@@ -240,15 +246,16 @@ contract BountyHive is Ownable, ReentrancyGuard {
         bytes32 commitKey = keccak256(abi.encodePacked(msg.sender, bountyId));
 
         commitments[commitKey] = Commitment({
-            hash: reportHash,
+            reportCID: reportCID,
             bountyId: bountyId,
             timestamp: block.timestamp,
             revealed: false
         });
 
         bountySubmitters[bountyId].push(msg.sender);
+        submitterReportCIDs[msg.sender].push(reportCID);
 
-        emit FindingCommitted(bountyId, msg.sender, reportHash);
+        emit FindingCommitted(bountyId, msg.sender, reportCID);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -256,17 +263,13 @@ contract BountyHive is Ownable, ReentrancyGuard {
     // ═══════════════════════════════════════════════════════════════════════════
 
     /**
-     * @notice Reveals a committed finding (Phase 2 of commit-reveal)
+     * @notice Reveals the PoC test for a committed finding (Phase 2)
      * @param bountyId The bounty ID
-     * @param reportCID IPFS CID of the vulnerability report
      * @param pocTestCID IPFS CID of the Foundry PoC test file (.t.sol)
-     * @param salt The salt used in the commitment
      */
     function revealFinding(
         uint256 bountyId,
-        string calldata reportCID,
-        string calldata pocTestCID,
-        uint256 salt
+        string calldata pocTestCID
     ) external {
         Bounty storage bounty = bounties[bountyId];
         if (bounty.sponsor == address(0)) revert BountyNotFound();
@@ -275,14 +278,8 @@ contract BountyHive is Ownable, ReentrancyGuard {
         bytes32 commitKey = keccak256(abi.encodePacked(msg.sender, bountyId));
         Commitment storage commitment = commitments[commitKey];
 
-        if (commitment.hash == bytes32(0)) revert CommitmentNotFound();
+        if (bytes(commitment.reportCID).length == 0) revert CommitmentNotFound();
         if (commitment.revealed) revert CommitmentAlreadyRevealed();
-
-        // Verify the reveal matches the commitment
-        bytes32 expectedHash = keccak256(
-            abi.encodePacked(msg.sender, reportCID, salt)
-        );
-        if (expectedHash != commitment.hash) revert InvalidReveal();
 
         // Mark as revealed
         commitment.revealed = true;
@@ -290,12 +287,12 @@ contract BountyHive is Ownable, ReentrancyGuard {
         // Store the finding
         findings[bountyId][msg.sender] = Finding({
             submitter: msg.sender,
-            reportCID: reportCID,
+            reportCID: commitment.reportCID,
             pocTestCID: pocTestCID,
             revealedAt: block.timestamp
         });
 
-        emit FindingRevealed(bountyId, msg.sender, reportCID, pocTestCID);
+        emit FindingRevealed(bountyId, msg.sender, commitment.reportCID, pocTestCID);
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
@@ -403,18 +400,14 @@ contract BountyHive is Ownable, ReentrancyGuard {
     }
 
     /**
-     * @notice Computes the commitment hash for a finding
-     * @param tbaAddress The TBA address
-     * @param reportCID The report CID
-     * @param salt The salt
-     * @return The commitment hash
+     * @notice Gets all report CIDs submitted by an address
+     * @param submitter The submitter address
+     * @return Array of IPFS CIDs
      */
-    function computeCommitmentHash(
-        address tbaAddress,
-        string calldata reportCID,
-        uint256 salt
-    ) external pure returns (bytes32) {
-        return keccak256(abi.encodePacked(tbaAddress, reportCID, salt));
+    function getSubmitterReportCIDs(
+        address submitter
+    ) external view returns (string[] memory) {
+        return submitterReportCIDs[submitter];
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
