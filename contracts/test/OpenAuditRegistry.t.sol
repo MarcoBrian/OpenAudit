@@ -3,9 +3,18 @@ pragma solidity ^0.8.20;
 
 import "forge-std/Test.sol";
 import "../src/OpenAuditRegistry.sol";
+import "../src/ERC6551Account.sol";
+import "../src/mocks/MockERC6551Registry.sol";
+import "../src/mocks/MockENS.sol";
 
 contract OpenAuditRegistryTest is Test {
     OpenAuditRegistry public registry;
+    ERC6551Account    public tbaImpl;
+    MockERC6551Registry public erc6551Reg;
+    MockENSRegistry   public ensReg;
+    MockENSResolver   public ensRes;
+
+    bytes32 public constant PARENT_NODE = keccak256("openaudit.eth");
 
     address public deployer = address(1);
     address public agent1   = address(2);
@@ -13,27 +22,68 @@ contract OpenAuditRegistryTest is Test {
     address public sponsor  = address(4);
 
     function setUp() public {
-        vm.prank(deployer);
-        registry = new OpenAuditRegistry();
+        vm.startPrank(deployer);
+
+        // Deploy mock infrastructure
+        tbaImpl   = new ERC6551Account();
+        erc6551Reg = new MockERC6551Registry();
+        ensReg    = new MockENSRegistry();
+        ensRes    = new MockENSResolver();
+
+        // Deploy registry
+        registry = new OpenAuditRegistry(
+            address(erc6551Reg),
+            address(tbaImpl),
+            address(ensReg),
+            address(ensRes),
+            PARENT_NODE
+        );
+
+        // Give the registry contract ownership of the ENS parent node
+        ensReg.setNodeOwner(PARENT_NODE, address(registry));
+
+        vm.stopPrank();
 
         vm.deal(sponsor, 100 ether);
         vm.deal(agent1, 1 ether);
     }
 
-    // ── Agent Registration ───────────────────────────────────────────────
+    // ── Agent Registration (with TBA + ENS) ─────────────────────────────
 
     function test_RegisterAgent() public {
         vm.prank(agent1);
-        uint256 id = registry.registerAgent("alice-auditor", "ipfs://QmMeta1");
+        (uint256 id, address tba) = registry.registerAgent("alice-auditor", "ipfs://QmMeta1");
 
         assertEq(id, 1);
+        assertTrue(tba != address(0));
         assertTrue(registry.isRegistered(agent1));
-        assertEq(registry.addressToAgentId(agent1), 1);
+        assertTrue(registry.isRegistered(tba)); // TBA also counts as registered
+        assertEq(registry.ownerToAgentId(agent1), 1);
+        assertEq(registry.tbaToAgentId(tba), 1);
 
         OpenAuditRegistry.Agent memory a = registry.getAgent(1);
         assertEq(a.owner, agent1);
+        assertEq(a.tba, tba);
         assertEq(a.name, "alice-auditor");
         assertEq(a.metadataURI, "ipfs://QmMeta1");
+
+        // Agent NFT minted
+        assertEq(registry.ownerOf(1), agent1);
+    }
+
+    function test_RegisterAgent_ENS() public {
+        vm.prank(agent1);
+        (uint256 id, address tba) = registry.registerAgent("alice", "ipfs://QmMeta1");
+
+        // ENS subdomain resolves to TBA
+        bytes32 labelHash = keccak256(bytes("alice"));
+        bytes32 node = keccak256(abi.encodePacked(PARENT_NODE, labelHash));
+
+        assertEq(ensRes.addr(node), tba);
+        assertEq(keccak256(bytes(ensRes.text(node, "score"))), keccak256(bytes("0")));
+
+        // resolveName helper works
+        assertEq(registry.resolveName("alice"), tba);
     }
 
     function test_RegisterAgent_Duplicate() public {
@@ -43,6 +93,15 @@ contract OpenAuditRegistryTest is Test {
         vm.prank(agent1);
         vm.expectRevert(OpenAuditRegistry.AlreadyRegistered.selector);
         registry.registerAgent("a2", "ipfs://m");
+    }
+
+    function test_RegisterAgent_NameTaken() public {
+        vm.prank(agent1);
+        registry.registerAgent("coolname", "ipfs://m");
+
+        vm.prank(agent2);
+        vm.expectRevert(OpenAuditRegistry.NameTaken.selector);
+        registry.registerAgent("coolname", "ipfs://m2");
     }
 
     function test_RegisterAgent_EmptyName() public {
@@ -160,12 +219,12 @@ contract OpenAuditRegistryTest is Test {
         registry.submitFinding(bountyId, "QmCID2");
     }
 
-    // ── Resolve Bounty ───────────────────────────────────────────────────
+    // ── Resolve Bounty + ENS Score Update ────────────────────────────────
 
     function test_FullWorkflow() public {
         // Register
         vm.prank(agent1);
-        registry.registerAgent("alice", "ipfs://m");
+        (uint256 agentId, address tba) = registry.registerAgent("alice", "ipfs://m");
 
         // Bounty
         vm.prank(sponsor);
@@ -194,6 +253,10 @@ contract OpenAuditRegistryTest is Test {
         assertEq(total, 80);
         assertEq(count, 1);
         assertEq(avg, 80);
+
+        // ENS score text record updated
+        bytes32 node = registry.agentENSNode(agentId);
+        assertEq(keccak256(bytes(ensRes.text(node, "score"))), keccak256(bytes("80")));
     }
 
     function test_ResolveBounty_NoFinding() public {
@@ -232,5 +295,37 @@ contract OpenAuditRegistryTest is Test {
         (, , , , , bool resolved, address winner) = registry.bounties(bountyId);
         assertTrue(resolved);
         assertEq(winner, agent2);
+    }
+
+    function test_ResolveENS_AvgScoreUpdates() public {
+        // Register agent
+        vm.prank(agent1);
+        (uint256 agentId, ) = registry.registerAgent("alice", "ipfs://m");
+
+        // Bounty 1
+        vm.prank(sponsor);
+        uint256 b1 = registry.createBounty{value: 1 ether}(address(0xBEEF), block.timestamp + 7 days);
+        vm.prank(agent1);
+        registry.submitFinding(b1, "QmR1");
+        vm.prank(deployer);
+        registry.resolveBounty(b1, agent1, 60);
+
+        // Bounty 2
+        vm.prank(sponsor);
+        uint256 b2 = registry.createBounty{value: 1 ether}(address(0xBEEF), block.timestamp + 7 days);
+        vm.prank(agent1);
+        registry.submitFinding(b2, "QmR2");
+        vm.prank(deployer);
+        registry.resolveBounty(b2, agent1, 100);
+
+        // avg = (60 + 100) / 2 = 80
+        (uint256 total, uint256 count, uint256 avg) = registry.getReputation(agent1);
+        assertEq(total, 160);
+        assertEq(count, 2);
+        assertEq(avg, 80);
+
+        // ENS text record should reflect avg
+        bytes32 node = registry.agentENSNode(agentId);
+        assertEq(keccak256(bytes(ensRes.text(node, "score"))), keccak256(bytes("80")));
     }
 }
