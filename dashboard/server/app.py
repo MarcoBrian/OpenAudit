@@ -8,7 +8,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from dotenv import load_dotenv
@@ -267,3 +267,44 @@ def list_ipfs_reports() -> JSONResponse:
     """Return all pinned reports from the local CID registry."""
     entries = registry.list_entries()
     return JSONResponse({"reports": entries})
+
+
+@app.post("/api/ipfs/pin")
+async def pin_report(request: Request) -> JSONResponse:
+    """Pin an arbitrary JSON report to IPFS and return its CID.
+
+    This is the endpoint the agent should call **before** ``commitFinding``
+    on-chain.  The flow is:
+
+    1. Agent builds its bug-report JSON.
+    2. ``POST /api/ipfs/pin`` with ``{ "report": <report_json>, "name": "<optional_name>" }``
+    3. Server pins to Pinata, returns ``{ "cid": "...", "gateway_url": "..." }``.
+    4. Agent calls ``commitFinding(bountyId, cid)`` on-chain.
+    """
+    body = await request.json()
+
+    report = body.get("report")
+    if not report or not isinstance(report, dict):
+        return JSONResponse(
+            {"error": "Missing or invalid 'report' field (must be a JSON object)"},
+            status_code=400,
+        )
+
+    name = body.get("name", "openaudit-report")
+
+    try:
+        cid = pin_json(report, name=str(name))
+        gw_url = gateway_url(cid)
+
+        # Add to local registry
+        registry.add_entry(
+            cid=cid,
+            job_id=name,
+            title=report.get("title", "Untitled"),
+            severity=report.get("severity", "UNKNOWN"),
+            gateway_url=gw_url,
+        )
+
+        return JSONResponse({"cid": cid, "gateway_url": gw_url})
+    except PinataError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
