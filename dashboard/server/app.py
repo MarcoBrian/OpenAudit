@@ -39,6 +39,12 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.get("/", tags=["health"])
+def health_check():
+    """Simple health-check endpoint."""
+    return {"status": "ok", "service": "OpenAudit API"}
+
+
 
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
     path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
