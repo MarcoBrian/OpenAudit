@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import sys
 import threading
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, File, Form, UploadFile
+from fastapi import FastAPI, File, Form, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from dotenv import load_dotenv
@@ -18,6 +19,12 @@ if str(ROOT_DIR) not in sys.path:
 
 from agents.cli import run_graph, run_linear
 from agents.progress import ProgressReporter
+
+# Local modules
+from dashboard.server.pinata import PinataError, gateway_url, pin_json
+from dashboard.server import registry
+
+logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 RUNS_DIR = BASE_DIR / "runs"
@@ -31,6 +38,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+@app.get("/", tags=["health"])
+def health_check():
+    """Simple health-check endpoint."""
+    return {"status": "ok", "service": "OpenAudit API"}
+
 
 
 def _write_json(path: Path, payload: Dict[str, Any]) -> None:
@@ -51,6 +64,7 @@ def _allowed_artifacts() -> set[str]:
         "static_analysis_summary.json",
         "triage.json",
         "logic.json",
+        "ipfs.json",
     }
 
 
@@ -94,6 +108,24 @@ def _run_job(
                 progress=progress,
             )
         _write_json(job_dir / "submission.json", submission)
+
+        # --- Auto-pin to IPFS via Pinata ---
+        try:
+            cid = pin_json(submission, name=f"openaudit-{job_dir.name}")
+            gw_url = gateway_url(cid)
+            _write_json(job_dir / "ipfs.json", {"cid": cid, "gateway_url": gw_url})
+            registry.add_entry(
+                cid=cid,
+                job_id=job_dir.name,
+                title=submission.get("title", "Untitled"),
+                severity=submission.get("severity", "UNKNOWN"),
+                gateway_url=gw_url,
+            )
+            logger.info("Pinned job %s → CID %s", job_dir.name, cid)
+        except Exception as pin_exc:  # noqa: BLE001
+            logger.warning("IPFS pin failed for job %s: %s", job_dir.name, pin_exc)
+            _write_json(job_dir / "ipfs_error.json", {"error": str(pin_exc)})
+
         _write_json(status_path, {"status": "completed"})
         progress.complete("done", "Job completed")
     except Exception as exc:  # noqa: BLE001
@@ -140,6 +172,7 @@ def get_job(job_id: str) -> JSONResponse:
     progress = _load_json(job_dir / "progress.json")
     submission = _load_json(job_dir / "submission.json")
     error = _load_json(job_dir / "error.json")
+    ipfs = _load_json(job_dir / "ipfs.json")
     return JSONResponse(
         {
             "job_id": job_id,
@@ -147,6 +180,7 @@ def get_job(job_id: str) -> JSONResponse:
             "progress": progress,
             "submission": submission,
             "error": error,
+            "ipfs": ipfs,
         }
     )
 
@@ -188,3 +222,95 @@ def get_artifact(job_id: str, name: str):
     if source and name == source.name:
         return FileResponse(source)
     return JSONResponse({"error": "Not allowed"}, status_code=400)
+
+
+# ---------------------------------------------------------------------------
+# IPFS / Pinata endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.post("/api/ipfs/pin/{job_id}")
+def pin_job_report(job_id: str) -> JSONResponse:
+    """Manually pin a completed job's submission to Pinata.
+
+    Idempotent: if the report was already pinned, the existing CID is returned.
+    """
+    job_dir = RUNS_DIR / job_id
+    if not job_dir.exists():
+        return JSONResponse({"error": "Job not found"}, status_code=404)
+
+    # Return existing pin if already done
+    existing = _load_json(job_dir / "ipfs.json")
+    if existing:
+        return JSONResponse(existing)
+
+    submission = _load_json(job_dir / "submission.json")
+    if not submission:
+        return JSONResponse(
+            {"error": "No submission.json found – job may not be complete"},
+            status_code=400,
+        )
+
+    try:
+        cid = pin_json(submission, name=f"openaudit-{job_id}")
+        gw_url = gateway_url(cid)
+        ipfs_data = {"cid": cid, "gateway_url": gw_url}
+        _write_json(job_dir / "ipfs.json", ipfs_data)
+        registry.add_entry(
+            cid=cid,
+            job_id=job_id,
+            title=submission.get("title", "Untitled"),
+            severity=submission.get("severity", "UNKNOWN"),
+            gateway_url=gw_url,
+        )
+        return JSONResponse(ipfs_data)
+    except PinataError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
+
+
+@app.get("/api/ipfs/reports")
+def list_ipfs_reports() -> JSONResponse:
+    """Return all pinned reports from the local CID registry."""
+    entries = registry.list_entries()
+    return JSONResponse({"reports": entries})
+
+
+@app.post("/api/ipfs/pin")
+async def pin_report(request: Request) -> JSONResponse:
+    """Pin an arbitrary JSON report to IPFS and return its CID.
+
+    This is the endpoint the agent should call **before** ``commitFinding``
+    on-chain.  The flow is:
+
+    1. Agent builds its bug-report JSON.
+    2. ``POST /api/ipfs/pin`` with ``{ "report": <report_json>, "name": "<optional_name>" }``
+    3. Server pins to Pinata, returns ``{ "cid": "...", "gateway_url": "..." }``.
+    4. Agent calls ``commitFinding(bountyId, cid)`` on-chain.
+    """
+    body = await request.json()
+
+    report = body.get("report")
+    if not report or not isinstance(report, dict):
+        return JSONResponse(
+            {"error": "Missing or invalid 'report' field (must be a JSON object)"},
+            status_code=400,
+        )
+
+    name = body.get("name", "openaudit-report")
+
+    try:
+        cid = pin_json(report, name=str(name))
+        gw_url = gateway_url(cid)
+
+        # Add to local registry
+        registry.add_entry(
+            cid=cid,
+            job_id=name,
+            title=report.get("title", "Untitled"),
+            severity=report.get("severity", "UNKNOWN"),
+            gateway_url=gw_url,
+        )
+
+        return JSONResponse({"cid": cid, "gateway_url": gw_url})
+    except PinataError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=502)
