@@ -1,0 +1,40 @@
+// SPDX-License-Identifier: MIT
+pragma solidity ^0.8.20;
+
+import "forge-std/Script.sol";
+
+import "../src/OpenAuditRegistry.sol";
+
+/**
+ * @title CreateBounty
+ * @notice Script to create a new bounty on OpenAuditRegistry
+ * @dev Required env vars: PRIVATE_KEY, OPENAUDIT_REGISTRY_ADDRESS, TARGET_CONTRACT_ADDRESS, DEADLINE, REWARD_WEI
+ */
+contract CreateBounty is Script {
+    function run() external {
+        uint256 sponsorPrivateKey = vm.envUint("PRIVATE_KEY");
+        address sponsor = vm.addr(sponsorPrivateKey);
+        address registryAddress = vm.envAddress("OPENAUDIT_REGISTRY_ADDRESS");
+        address targetContract = vm.envAddress("TARGET_CONTRACT_ADDRESS");
+        uint256 deadline = vm.envUint("DEADLINE");
+        uint256 rewardWei = vm.envUint("REWARD_WEI");
+
+        console.log("Sponsor:", sponsor);
+        console.log("OpenAuditRegistry:", registryAddress);
+        console.log("Target contract:", targetContract);
+        console.log("Deadline:", deadline);
+        console.log("Reward (wei):", rewardWei);
+        console.log("Chain ID:", block.chainid);
+
+        vm.startBroadcast(sponsorPrivateKey);
+
+        uint256 bountyId = OpenAuditRegistry(registryAddress).createBounty{value: rewardWei}(
+            targetContract,
+            deadline
+        );
+
+        vm.stopBroadcast();
+
+        console.log("Bounty created with ID:", bountyId);
+    }
+}

@@ -106,12 +106,12 @@ class AgentRuntimeError(RuntimeError):
 
 DEFAULT_AGENT_SYSTEM_PROMPT = (
     "You are OpenAudit's autonomous agent (the agent itself, not a third-party service). "
-    "You must register yourself in the AgentRegistry to submit bounties and earn rewards. "
+    "You must register yourself in the OpenAuditRegistry to submit bounties and earn rewards. "
     "IMPORTANT: When users ask to register the agent, you MUST use the register_agent tool. "
     "Do not just explain how to register - actually call the tool.\n\n"
     "Available tools:\n"
     "1. run_audit - Analyze Solidity files and produce JSON submissions\n"
-    "2. register_agent - Register this agent in the AgentRegistry (USE THIS when asked to register)\n"
+    "2. register_agent - Register this agent in the OpenAuditRegistry (USE THIS when asked to register)\n"
     "3. check_registration - Verify if an agent is registered\n"
     "4. Wallet tools - Only use when explicitly requested\n\n"
     "Examples:\n"
@@ -125,7 +125,7 @@ DEFAULT_AGENT_SYSTEM_PROMPT = (
 
 DEFAULT_CHAT_SYSTEM_PROMPT = (
     "You are the OpenAudit agent. You are responsible for self-registering and "
-    "self-checking your registration in the AgentRegistry so you can submit bounties and earn rewards. "
+    "self-checking your registration in the OpenAuditRegistry so you can submit bounties and earn rewards. "
     "You can run Solidity audits using Aderyn and Slither, triage findings, optionally perform an LLM "
     "logic review, and produce a JSON submission. "
     "If the user asks about bounties, rewards, or submissions, state clearly that you (the agent) must be "
@@ -264,11 +264,38 @@ def _extract_agent_name(text: str) -> Optional[str]:
         r"registered\s+for\s+['\"]?([\w\-]+)['\"]?",
         r"agent\s+['\"]?([\w\-]+)['\"]?\s+(?:registered|registration|status)",
     )
+    stop_words = {
+        "me",
+        "i",
+        "we",
+        "us",
+        "my",
+        "our",
+        "this",
+        "that",
+        "it",
+        "whether",
+        "if",
+        "is",
+        "are",
+        "am",
+        "you",
+        "your",
+        "the",
+        "a",
+        "an",
+        "agent",
+        "registration",
+        "registered",
+        "status",
+        "check",
+        "verify",
+    }
     for pattern in patterns:
         match = re.search(pattern, raw, flags=re.IGNORECASE)
         if match:
             candidate = match.group(1).strip().strip("`\"'")
-            if candidate and candidate not in {"me", "i", "we", "us", "my", "our", "this", "that", "it", "whether", "if"}:
+            if candidate and candidate.lower() not in stop_words:
                 return candidate
     return None
 
@@ -313,6 +340,205 @@ def _coerce_int(value: Any, default: int) -> int:
         return int(value)
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_agent_info(raw: Any) -> Any:
+    if isinstance(raw, dict):
+        return (
+            raw.get("owner"),
+            raw.get("tba"),
+            raw.get("name"),
+            raw.get("metadataURI"),
+            raw.get("totalScore"),
+            raw.get("findingsCount"),
+            raw.get("registered"),
+        )
+    if isinstance(raw, (list, tuple)) and len(raw) == 1 and isinstance(raw[0], (list, tuple)):
+        return raw[0]
+    return raw
+
+
+def _agent_info_to_dict(raw: Any) -> Dict[str, Any]:
+    info = _normalize_agent_info(raw)
+    if isinstance(info, dict):
+        owner = info.get("owner")
+        tba = info.get("tba")
+        name = info.get("name")
+        metadata_uri = info.get("metadataURI") or info.get("metadata_uri")
+        total_score = _coerce_int(info.get("totalScore"), 0)
+        findings_count = _coerce_int(info.get("findingsCount"), 0)
+        registered = _coerce_bool(info.get("registered"), False)
+        return {
+            "owner": owner,
+            "tba": tba,
+            "name": name,
+            "metadata_uri": metadata_uri,
+            "total_score": total_score,
+            "findings_count": findings_count,
+            "registered": registered,
+        }
+    if isinstance(info, (list, tuple)):
+        items = list(info)
+        if len(items) < 7:
+            items.extend([None] * (7 - len(items)))
+        owner, tba, name, metadata_uri, total_score, findings_count, registered = items[:7]
+        return {
+            "owner": owner,
+            "tba": tba,
+            "name": name,
+            "metadata_uri": metadata_uri,
+            "total_score": _coerce_int(total_score, 0),
+            "findings_count": _coerce_int(findings_count, 0),
+            "registered": _coerce_bool(registered, False),
+        }
+    return {
+        "owner": None,
+        "tba": None,
+        "name": None,
+        "metadata_uri": None,
+        "total_score": 0,
+        "findings_count": 0,
+        "registered": False,
+    }
+
+
+REGISTRY_ABI: list[dict[str, Any]] = [
+    {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "uint256", "name": "agentId", "type": "uint256"},
+            {"indexed": True, "internalType": "address", "name": "owner", "type": "address"},
+            {"indexed": True, "internalType": "address", "name": "tba", "type": "address"},
+            {"indexed": False, "internalType": "string", "name": "name", "type": "string"},
+        ],
+        "name": "AgentRegistered",
+        "type": "event",
+    },
+    {
+        "inputs": [
+            {"internalType": "string", "name": "name", "type": "string"},
+            {"internalType": "string", "name": "metadataURI", "type": "string"},
+        ],
+        "name": "registerAgent",
+        "outputs": [
+            {"internalType": "uint256", "name": "agentId", "type": "uint256"},
+            {"internalType": "address", "name": "tba", "type": "address"},
+        ],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "string", "name": "", "type": "string"}],
+        "name": "nameToAgentId",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "string", "name": "name", "type": "string"}],
+        "name": "resolveName",
+        "outputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "uint256", "name": "agentId", "type": "uint256"}],
+        "name": "getAgent",
+        "outputs": [
+            {
+                "components": [
+                    {"internalType": "address", "name": "owner", "type": "address"},
+                    {"internalType": "address", "name": "tba", "type": "address"},
+                    {"internalType": "string", "name": "name", "type": "string"},
+                    {"internalType": "string", "name": "metadataURI", "type": "string"},
+                    {"internalType": "uint256", "name": "totalScore", "type": "uint256"},
+                    {"internalType": "uint256", "name": "findingsCount", "type": "uint256"},
+                    {"internalType": "bool", "name": "registered", "type": "bool"},
+                ],
+                "internalType": "struct OpenAuditRegistry.Agent",
+                "name": "",
+                "type": "tuple",
+            },
+        ],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "addr", "type": "address"}],
+        "name": "isRegistered",
+        "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "name": "tbaToAgentId",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "address", "name": "", "type": "address"}],
+        "name": "ownerToAgentId",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+    {
+        "inputs": [],
+        "name": "nextAgentId",
+        "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
+        "stateMutability": "view",
+        "type": "function",
+    },
+]
+
+
+def _load_env() -> None:
+    try:
+        load_dotenv(override=False)
+    except Exception:
+        return
+
+
+def _get_rpc_url() -> Optional[str]:
+    return os.getenv("OPENAUDIT_WALLET_RPC_URL") or os.getenv("RPC_URL")
+
+
+def _get_registry_address() -> Optional[str]:
+    return (
+        os.getenv("OPENAUDIT_REGISTRY_ADDRESS")
+        or os.getenv("OPENAUDIT_REGISTRY")
+        or os.getenv("AGENT_REGISTRY_ADDRESS")
+    )
+
+
+def _ensure_registry_contract(contract: Any, registry_checksum: str) -> Optional[str]:
+    try:
+        contract.functions.nextAgentId().call()
+    except Exception as exc:
+        return (
+            "error: OpenAuditRegistry ABI mismatch. "
+            f"Check OPENAUDIT_REGISTRY_ADDRESS ({registry_checksum}). "
+            f"Detail: {exc}"
+        )
+    return None
+
+
+def _extract_agent_registered_event(contract: Any, receipt: Any) -> Optional[Dict[str, Any]]:
+    try:
+        events = contract.events.AgentRegistered().process_receipt(receipt)
+    except Exception:
+        return None
+    if not events:
+        return None
+    args = events[-1].get("args", {})
+    return {
+        "agent_id": int(args.get("agentId", 0)) if args.get("agentId") is not None else None,
+        "tba": args.get("tba"),
+        "owner": args.get("owner"),
+        "name": args.get("name"),
+    }
 
 
 def _is_info_intent(text: str) -> bool:
@@ -645,27 +871,27 @@ def _register_agent_impl(
     initial_operator: Optional[str] = None,
 ) -> str:
     """
-    REGISTER THIS AGENT in the on-chain AgentRegistry. Use this tool when the user asks to:
+    REGISTER THIS AGENT in the on-chain OpenAuditRegistry. Use this tool when the user asks to:
     - Register the agent
     - Register this agent
     - Sign up the agent
     - Create an agent registration
-    - Register in the AgentRegistry
+    - Register in the OpenAuditRegistry
     
-    This tool registers the agent as an ERC-721 NFT, creates a Token Bound Account (TBA), 
+    This tool registers the agent as an ERC-721 NFT, creates a Token Bound Account (TBA),
     and sets up an ENS subdomain. The agent will be able to participate in bounties after registration.
 
     Parameters (all optional):
     - metadata_uri: IPFS URI for agent metadata (default: "ipfs://test-agent-metadata")
     - agent_name: Name for the agent, will become {agent_name}.openaudit.eth (default: "agent-local-test")
-    - initial_operator: Address that can operate on behalf of the agent (default: wallet address)
+    - initial_operator: (legacy) ignored by OpenAuditRegistry; kept for backward compatibility
 
     If no parameters are provided, sensible test defaults are used for local Anvil.
 
     Configuration (via .env):
     - OPENAUDIT_WALLET_PRIVATE_KEY: private key of the agent wallet (REQUIRED)
     - OPENAUDIT_WALLET_RPC_URL: RPC URL for the target network (REQUIRED)
-    - AGENT_REGISTRY_ADDRESS: AgentRegistry contract address (optional, has default)
+    - OPENAUDIT_REGISTRY_ADDRESS: OpenAuditRegistry contract address (REQUIRED)
 
     Returns JSON with status, agent_id, tba address, and transaction hash.
     """
@@ -673,6 +899,8 @@ def _register_agent_impl(
         raise AgentRuntimeError(
             "web3.py is not installed. Install it with: pip install web3"
         ) from _WEB3_IMPORT_ERROR  # type: ignore[arg-type]
+
+    _load_env()
 
     # Allow LangChain to pass a single JSON-encoded argument
     if isinstance(metadata_uri, dict):  # type: ignore[redundant-expr]
@@ -682,10 +910,10 @@ def _register_agent_impl(
         initial_operator = payload.get("initial_operator")
 
     private_key = os.getenv("OPENAUDIT_WALLET_PRIVATE_KEY")
-    rpc_url = os.getenv("OPENAUDIT_WALLET_RPC_URL")
+    rpc_url = _get_rpc_url()
     if not private_key or not rpc_url:
         return (
-            "error: missing OPENAUDIT_WALLET_PRIVATE_KEY or OPENAUDIT_WALLET_RPC_URL. "
+            "error: missing OPENAUDIT_WALLET_PRIVATE_KEY or OPENAUDIT_WALLET_RPC_URL (or RPC_URL). "
             "Set these in your .env to enable on-chain registration."
         )
 
@@ -695,51 +923,35 @@ def _register_agent_impl(
 
     account = w3.eth.account.from_key(private_key)
 
-    registry_address = os.getenv(
-        "AGENT_REGISTRY_ADDRESS",
-        "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",  # default: local DeployLocal
-    )
+    registry_address = _get_registry_address()
+    if not registry_address:
+        return (
+            "error: missing OPENAUDIT_REGISTRY_ADDRESS. "
+            "Set this in your .env to enable on-chain registration."
+        )
 
     try:
         registry_checksum = w3.to_checksum_address(registry_address)
     except ValueError:
-        return f"error: invalid AGENT_REGISTRY_ADDRESS: {registry_address}"
+        return f"error: invalid OPENAUDIT_REGISTRY_ADDRESS: {registry_address}"
 
-    abi = [
-        {
-            "inputs": [
-                {"internalType": "string", "name": "metadataURI", "type": "string"},
-                {"internalType": "string", "name": "agentName", "type": "string"},
-                {"internalType": "address", "name": "initialOperator", "type": "address"},
-            ],
-            "name": "registerAgent",
-            "outputs": [
-                {"internalType": "uint256", "name": "agentId", "type": "uint256"},
-                {"internalType": "address", "name": "tba", "type": "address"},
-            ],
-            "stateMutability": "nonpayable",
-            "type": "function",
-        }
-    ]
-
-    contract = w3.eth.contract(address=registry_checksum, abi=abi)
+    contract = w3.eth.contract(address=registry_checksum, abi=REGISTRY_ABI)
+    registry_error = _ensure_registry_contract(contract, registry_checksum)
+    if registry_error:
+        return registry_error
 
     # Defaults for local testing
     metadata_uri = metadata_uri or "ipfs://test-agent-metadata"
     agent_name = agent_name or "agent-local-test"
-    initial_operator = initial_operator or account.address
-
-    try:
-        operator_checksum = w3.to_checksum_address(initial_operator)
-    except ValueError:
-        return f"error: invalid initial_operator address: {initial_operator}"
+    if initial_operator:
+        # OpenAuditRegistry does not accept initial_operator; keep for backward compatibility.
+        pass
 
     try:
         nonce = w3.eth.get_transaction_count(account.address)
         tx = contract.functions.registerAgent(
-            metadata_uri,
             agent_name,
-            operator_checksum,
+            metadata_uri,
         ).build_transaction(
             {
                 "from": account.address,
@@ -762,24 +974,36 @@ def _register_agent_impl(
                 }
             )
 
-        # Try to decode return values using eth_call on the same data
-        try:
-            call_result = w3.eth.call(
-                {
-                    "to": registry_checksum,
-                    "data": tx["data"],
-                },
-                block_identifier=receipt.blockNumber,
-            )
-            agent_id, tba = contract.decode_function_output(
-                "registerAgent",
-                call_result,
-            )
-            agent_id_int = int(agent_id)
-            tba_addr = str(tba)
-        except Exception:
-            agent_id_int = None
-            tba_addr = None
+        agent_id_int: Optional[int] = None
+        tba_addr: Optional[str] = None
+
+        event_data = _extract_agent_registered_event(contract, receipt)
+        if event_data:
+            agent_id_int = event_data.get("agent_id")
+            tba_addr = event_data.get("tba")
+
+        if not agent_id_int:
+            try:
+                agent_id_from_name = contract.functions.nameToAgentId(agent_name).call()
+                agent_id_int = int(agent_id_from_name) if int(agent_id_from_name) > 0 else None
+            except Exception:
+                agent_id_int = agent_id_int or None
+
+        if agent_id_int and not tba_addr:
+            try:
+                resolved = contract.functions.resolveName(agent_name).call()
+                if resolved and str(resolved) != "0x0000000000000000000000000000000000000000":
+                    tba_addr = str(resolved)
+            except Exception:
+                pass
+
+        if agent_id_int and not tba_addr:
+            try:
+                agent_info_raw = contract.functions.getAgent(agent_id_int).call()
+                agent_info = _agent_info_to_dict(agent_info_raw)
+                tba_addr = agent_info.get("tba")
+            except Exception:
+                pass
 
         return json.dumps(
             {
@@ -787,7 +1011,7 @@ def _register_agent_impl(
                 "tx_hash": tx_hash.hex(),
                 "agent_name": agent_name,
                 "metadata_uri": metadata_uri,
-                "initial_operator": operator_checksum,
+                "owner": account.address,
                 "agent_id": agent_id_int,
                 "tba": tba_addr,
                 "registry": registry_checksum,
@@ -796,6 +1020,11 @@ def _register_agent_impl(
     except ContractLogicError as exc:  # type: ignore[misc]
         return f"error: contract reverted during registerAgent: {exc}"
     except Exception as exc:
+        if "Could not decode contract function call" in str(exc):
+            return (
+                "error: OpenAuditRegistry ABI mismatch. "
+                "Check OPENAUDIT_REGISTRY_ADDRESS points to OpenAuditRegistry."
+            )
         return f"error: failed to register agent: {exc}"
 
 
@@ -810,12 +1039,12 @@ else:
         initial_operator: Optional[str] = None,
     ) -> str:
         """
-        REGISTER THIS AGENT in the on-chain AgentRegistry. Use this tool when the user asks to:
+        REGISTER THIS AGENT in the on-chain OpenAuditRegistry. Use this tool when the user asks to:
         - Register the agent
         - Register this agent
         - Sign up the agent
         - Create an agent registration
-        - Register in the AgentRegistry
+        - Register in the OpenAuditRegistry
 
         This tool registers the agent as an ERC-721 NFT, creates a Token Bound Account (TBA),
         and sets up an ENS subdomain. The agent will be able to participate in bounties after registration.
@@ -823,14 +1052,14 @@ else:
         Parameters (all optional):
         - metadata_uri: IPFS URI for agent metadata (default: "ipfs://test-agent-metadata")
         - agent_name: Name for the agent, will become {agent_name}.openaudit.eth (default: "agent-local-test")
-        - initial_operator: Address that can operate on behalf of the agent (default: wallet address)
+        - initial_operator: (legacy) ignored by OpenAuditRegistry; kept for compatibility
 
         If no parameters are provided, sensible test defaults are used for local Anvil.
 
         Configuration (via .env):
         - OPENAUDIT_WALLET_PRIVATE_KEY: private key of the agent wallet (REQUIRED)
         - OPENAUDIT_WALLET_RPC_URL: RPC URL for the target network (REQUIRED)
-        - AGENT_REGISTRY_ADDRESS: AgentRegistry contract address (optional, has default)
+        - OPENAUDIT_REGISTRY_ADDRESS: OpenAuditRegistry contract address (REQUIRED)
 
         Returns JSON with status, agent_id, tba address, and transaction hash.
         """
@@ -847,7 +1076,7 @@ def _check_registration_impl(
     tba_address: Optional[str] = None,
 ) -> str:
     """
-    Check if an agent is registered in the AgentRegistry.
+    Check if an agent is registered in the OpenAuditRegistry.
 
     You can check by:
     - agent_name: The agent's name (e.g., "agent-local-test")
@@ -857,12 +1086,14 @@ def _check_registration_impl(
     If no parameters are provided, it will check the agent's own wallet address
     by looking up the wallet from OPENAUDIT_WALLET_PRIVATE_KEY.
 
-    Returns agent information including name, TBA, owner, operator, and agent ID.
+    Returns agent information including name, TBA, owner, metadata URI, and agent ID.
     """
     if Web3 is None:
         raise AgentRuntimeError(
             "web3.py is not installed. Install it with: pip install web3"
         ) from _WEB3_IMPORT_ERROR  # type: ignore[arg-type]
+
+    _load_env()
 
     # Allow LangChain to pass a single JSON-encoded argument
     if isinstance(agent_name, dict):  # type: ignore[redundant-expr]
@@ -877,10 +1108,10 @@ def _check_registration_impl(
         except (TypeError, ValueError):
             return f"error: invalid agent_id: {agent_id}"
 
-    rpc_url = os.getenv("OPENAUDIT_WALLET_RPC_URL")
+    rpc_url = _get_rpc_url()
     if not rpc_url:
         return (
-            "error: missing OPENAUDIT_WALLET_RPC_URL. "
+            "error: missing OPENAUDIT_WALLET_RPC_URL (or RPC_URL). "
             "Set this in your .env to enable registration checks."
         )
 
@@ -888,61 +1119,22 @@ def _check_registration_impl(
     if not w3.is_connected():
         return f"error: could not connect to RPC at {rpc_url}"
 
-    registry_address = os.getenv(
-        "AGENT_REGISTRY_ADDRESS",
-        "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9",  # default: local DeployLocal
-    )
+    registry_address = _get_registry_address()
+    if not registry_address:
+        return (
+            "error: missing OPENAUDIT_REGISTRY_ADDRESS. "
+            "Set this in your .env to enable registration checks."
+        )
 
     try:
         registry_checksum = w3.to_checksum_address(registry_address)
     except ValueError:
-        return f"error: invalid AGENT_REGISTRY_ADDRESS: {registry_address}"
+        return f"error: invalid OPENAUDIT_REGISTRY_ADDRESS: {registry_address}"
 
-    # ABI for view functions
-    abi = [
-        {
-            "inputs": [{"internalType": "string", "name": "agentName", "type": "string"}],
-            "name": "resolveName",
-            "outputs": [{"internalType": "address", "name": "", "type": "address"}],
-            "stateMutability": "view",
-            "type": "function",
-        },
-        {
-            "inputs": [{"internalType": "uint256", "name": "agentId", "type": "uint256"}],
-            "name": "getAgent",
-            "outputs": [
-                {"internalType": "string", "name": "name", "type": "string"},
-                {"internalType": "address", "name": "tba", "type": "address"},
-                {"internalType": "address", "name": "agentOwner", "type": "address"},
-                {"internalType": "address", "name": "operator", "type": "address"},
-            ],
-            "stateMutability": "view",
-            "type": "function",
-        },
-        {
-            "inputs": [{"internalType": "address", "name": "tba", "type": "address"}],
-            "name": "isRegisteredAgent",
-            "outputs": [{"internalType": "bool", "name": "", "type": "bool"}],
-            "stateMutability": "view",
-            "type": "function",
-        },
-        {
-            "inputs": [{"internalType": "address", "name": "", "type": "address"}],
-            "name": "tbaToAgentId",
-            "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-            "stateMutability": "view",
-            "type": "function",
-        },
-        {
-            "inputs": [],
-            "name": "totalAgents",
-            "outputs": [{"internalType": "uint256", "name": "", "type": "uint256"}],
-            "stateMutability": "view",
-            "type": "function",
-        },
-    ]
-
-    contract = w3.eth.contract(address=registry_checksum, abi=abi)
+    contract = w3.eth.contract(address=registry_checksum, abi=REGISTRY_ABI)
+    registry_error = _ensure_registry_contract(contract, registry_checksum)
+    if registry_error:
+        return registry_error
 
     result: Dict[str, Any] = {
         "registry": registry_checksum,
@@ -951,46 +1143,60 @@ def _check_registration_impl(
     try:
         # Check by agent name
         if agent_name:
-            tba = contract.functions.resolveName(agent_name).call()
-            if tba == "0x0000000000000000000000000000000000000000":
+            agent_id_from_name = contract.functions.nameToAgentId(agent_name).call()
+            agent_id_int = _coerce_int(agent_id_from_name, 0)
+            if agent_id_int == 0:
+                try:
+                    resolved_tba = contract.functions.resolveName(agent_name).call()
+                    if resolved_tba and str(resolved_tba) != "0x0000000000000000000000000000000000000000":
+                        agent_id_int = _coerce_int(
+                            contract.functions.tbaToAgentId(resolved_tba).call(),
+                            0,
+                        )
+                except Exception:
+                    agent_id_int = 0
+            if agent_id_int == 0:
                 return json.dumps({
                     "status": "not_found",
                     "agent_name": agent_name,
                     "message": f"Agent with name '{agent_name}' is not registered",
                     **result,
                 })
-            # Get agent ID from TBA
-            agent_id_from_tba = contract.functions.tbaToAgentId(tba).call()
-            if agent_id_from_tba > 0:
-                agent_info = contract.functions.getAgent(agent_id_from_tba).call()
-                return json.dumps({
-                    "status": "registered",
-                    "agent_name": agent_name,
-                    "agent_id": agent_id_from_tba,
-                    "tba": tba,
-                    "owner": agent_info[2],
-                    "operator": agent_info[3],
-                    **result,
-                })
+            agent_info_raw = contract.functions.getAgent(agent_id_int).call()
+            agent_info = _agent_info_to_dict(agent_info_raw)
             return json.dumps({
                 "status": "registered",
                 "agent_name": agent_name,
-                "tba": tba,
-                "agent_id": None,
+                "agent_id": int(agent_id_int),
+                "tba": agent_info.get("tba"),
+                "owner": agent_info.get("owner"),
+                "metadata_uri": agent_info.get("metadata_uri"),
+                "total_score": agent_info.get("total_score", 0),
+                "findings_count": agent_info.get("findings_count", 0),
                 **result,
             })
 
         # Check by agent ID
         if agent_id is not None:
             try:
-                agent_info = contract.functions.getAgent(agent_id).call()
+                agent_info_raw = contract.functions.getAgent(agent_id).call()
+                agent_info = _agent_info_to_dict(agent_info_raw)
+                if not agent_info.get("registered"):
+                    return json.dumps({
+                        "status": "not_found",
+                        "agent_id": agent_id,
+                        "message": f"Agent with ID {agent_id} does not exist",
+                        **result,
+                    })
                 return json.dumps({
                     "status": "registered",
                     "agent_id": agent_id,
-                    "name": agent_info[0],
-                    "tba": agent_info[1],
-                    "owner": agent_info[2],
-                    "operator": agent_info[3],
+                    "name": agent_info.get("name"),
+                    "tba": agent_info.get("tba"),
+                    "owner": agent_info.get("owner"),
+                    "metadata_uri": agent_info.get("metadata_uri"),
+                    "total_score": agent_info.get("total_score", 0),
+                    "findings_count": agent_info.get("findings_count", 0),
                     **result,
                 })
             except Exception as exc:
@@ -1010,8 +1216,8 @@ def _check_registration_impl(
             except ValueError:
                 return f"error: invalid TBA address: {tba_address}"
 
-            is_registered = contract.functions.isRegisteredAgent(tba_checksum).call()
-            if not is_registered:
+            agent_id_from_tba = contract.functions.tbaToAgentId(tba_checksum).call()
+            if _coerce_int(agent_id_from_tba, 0) == 0:
                 return json.dumps({
                     "status": "not_registered",
                     "tba": tba_checksum,
@@ -1019,22 +1225,17 @@ def _check_registration_impl(
                     **result,
                 })
 
-            agent_id_from_tba = contract.functions.tbaToAgentId(tba_checksum).call()
-            if agent_id_from_tba > 0:
-                agent_info = contract.functions.getAgent(agent_id_from_tba).call()
-                return json.dumps({
-                    "status": "registered",
-                    "tba": tba_checksum,
-                    "agent_id": agent_id_from_tba,
-                    "name": agent_info[0],
-                    "owner": agent_info[2],
-                    "operator": agent_info[3],
-                    **result,
-                })
+            agent_info_raw = contract.functions.getAgent(agent_id_from_tba).call()
+            agent_info = _agent_info_to_dict(agent_info_raw)
             return json.dumps({
                 "status": "registered",
                 "tba": tba_checksum,
-                "agent_id": None,
+                "agent_id": int(agent_id_from_tba),
+                "name": agent_info.get("name"),
+                "owner": agent_info.get("owner"),
+                "metadata_uri": agent_info.get("metadata_uri"),
+                "total_score": agent_info.get("total_score", 0),
+                "findings_count": agent_info.get("findings_count", 0),
                 **result,
             })
 
@@ -1050,54 +1251,66 @@ def _check_registration_impl(
         wallet_address = account.address
         wallet_checksum = w3.to_checksum_address(wallet_address)
 
-        # Check if the wallet itself is a registered TBA
-        try:
-            is_registered_tba = contract.functions.isRegisteredAgent(wallet_checksum).call()
-        except Exception:
-            is_registered_tba = False
-
-        if is_registered_tba:
-            agent_id_from_tba = contract.functions.tbaToAgentId(wallet_checksum).call()
-            if agent_id_from_tba > 0:
-                agent_info = contract.functions.getAgent(agent_id_from_tba).call()
-                return json.dumps({
-                    "status": "registered",
-                    "tba": wallet_checksum,
-                    "agent_id": agent_id_from_tba,
-                    "name": agent_info[0],
-                    "owner": agent_info[2],
-                    "operator": agent_info[3],
-                    **result,
-                })
+        owner_id = contract.functions.ownerToAgentId(wallet_checksum).call()
+        if _coerce_int(owner_id, 0) > 0:
+            agent_info_raw = contract.functions.getAgent(owner_id).call()
+            agent_info = _agent_info_to_dict(agent_info_raw)
             return json.dumps({
                 "status": "registered",
-                "tba": wallet_checksum,
-                "agent_id": None,
+                "agent_id": int(owner_id),
+                "name": agent_info.get("name"),
+                "tba": agent_info.get("tba"),
+                "owner": agent_info.get("owner"),
+                "metadata_uri": agent_info.get("metadata_uri"),
+                "total_score": agent_info.get("total_score", 0),
+                "findings_count": agent_info.get("findings_count", 0),
+                "wallet_address": wallet_address,
                 **result,
             })
 
-        # Otherwise, scan registered agents to see if this wallet is owner or operator
-        total = contract.functions.totalAgents().call()
+        tba_id = contract.functions.tbaToAgentId(wallet_checksum).call()
+        if _coerce_int(tba_id, 0) > 0:
+            agent_info_raw = contract.functions.getAgent(tba_id).call()
+            agent_info = _agent_info_to_dict(agent_info_raw)
+            return json.dumps({
+                "status": "registered",
+                "agent_id": int(tba_id),
+                "name": agent_info.get("name"),
+                "tba": agent_info.get("tba"),
+                "owner": agent_info.get("owner"),
+                "metadata_uri": agent_info.get("metadata_uri"),
+                "total_score": agent_info.get("total_score", 0),
+                "findings_count": agent_info.get("findings_count", 0),
+                "wallet_address": wallet_address,
+                **result,
+            })
+
+        # Otherwise, scan registered agents to see if this wallet is owner
+        next_id = contract.functions.nextAgentId().call()
         try:
-            total_int = int(total)
+            total_int = max(0, int(next_id) - 1)
         except (TypeError, ValueError):
             total_int = 0
 
         for agent_id in range(1, total_int + 1):
             try:
-                agent_info = contract.functions.getAgent(agent_id).call()
+                agent_info_raw = contract.functions.getAgent(agent_id).call()
+                agent_info = _agent_info_to_dict(agent_info_raw)
             except Exception:
                 continue
-            owner = str(agent_info[2]).lower()
-            operator = str(agent_info[3]).lower()
-            if owner == wallet_checksum.lower() or operator == wallet_checksum.lower():
+            if not agent_info.get("registered"):
+                continue
+            owner = str(agent_info.get("owner") or "").lower()
+            if owner == wallet_checksum.lower():
                 return json.dumps({
                     "status": "registered",
                     "agent_id": agent_id,
-                    "name": agent_info[0],
-                    "tba": agent_info[1],
-                    "owner": agent_info[2],
-                    "operator": agent_info[3],
+                    "name": agent_info.get("name"),
+                    "tba": agent_info.get("tba"),
+                    "owner": agent_info.get("owner"),
+                    "metadata_uri": agent_info.get("metadata_uri"),
+                    "total_score": agent_info.get("total_score", 0),
+                    "findings_count": agent_info.get("findings_count", 0),
                     "wallet_address": wallet_address,
                     "total_agents": total_int,
                     **result,
@@ -1112,6 +1325,11 @@ def _check_registration_impl(
         })
 
     except Exception as exc:
+        if "Could not decode contract function call" in str(exc):
+            return (
+                "error: OpenAuditRegistry ABI mismatch. "
+                "Check OPENAUDIT_REGISTRY_ADDRESS points to OpenAuditRegistry."
+            )
         return f"error: failed to check registration: {exc}"
 
 
@@ -1126,7 +1344,7 @@ else:
         tba_address: Optional[str] = None,
     ) -> str:
         """
-        Check if an agent is registered in the AgentRegistry.
+        Check if an agent is registered in the OpenAuditRegistry.
 
         You can check by:
         - agent_name: The agent's name (e.g., "agent-local-test")
@@ -1136,7 +1354,7 @@ else:
         If no parameters are provided, it will check the agent's own wallet address
         by looking up the wallet from OPENAUDIT_WALLET_PRIVATE_KEY.
 
-        Returns agent information including name, TBA, owner, operator, and agent ID.
+        Returns agent information including name, TBA, owner, metadata URI, and agent ID.
         """
         return _check_registration_impl(
             agent_name=agent_name,
@@ -1183,7 +1401,7 @@ def _build_prompt(system_prompt: str | None = None) -> ChatPromptTemplate:
         "CRITICAL: When a user asks to register the agent, you MUST call the register_agent tool. "
         "Do not just explain - actually execute the registration.\n\n"
         "Tool input formats:\n"
-        "- register_agent: JSON with optional metadata_uri, agent_name, initial_operator (all optional)\n"
+        "- register_agent: JSON with optional metadata_uri, agent_name (initial_operator ignored if provided)\n"
         "- check_registration: JSON with optional agent_name, agent_id, or tba_address\n"
         "- run_audit: JSON with file (required), tools, max_issues, use_llm, dump_intermediate, reports_dir\n\n"
         "Use the following format:\n"

@@ -8,7 +8,7 @@ The `register_agent` tool is available to your LangChain agent. Here are several
 ```bash
 OPENAUDIT_WALLET_PRIVATE_KEY=0x...  # Your agent's private key (use an Anvil account for local)
 OPENAUDIT_WALLET_RPC_URL=http://127.0.0.1:8545  # Local Anvil RPC
-AGENT_REGISTRY_ADDRESS=0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9  # From your DeployLocal output
+OPENAUDIT_REGISTRY_ADDRESS=0xYourRegistryAddress  # From your DeployRegistry output
 ```
 
 **Important Notes**:
@@ -36,7 +36,7 @@ python -m agents agent --mode chat
 
 Then in the chat prompt, type:
 ```
-Please register this agent in the AgentRegistry
+Please register this agent in the OpenAuditRegistry
 ```
 
 Or be more specific:
@@ -47,7 +47,7 @@ Use the register_agent tool to register this agent with name "my-test-agent" and
 The agent will automatically:
 - Use the wallet from `OPENAUDIT_WALLET_PRIVATE_KEY`
 - Connect to the RPC from `OPENAUDIT_WALLET_RPC_URL`
-- Call `AgentRegistry.registerAgent()` on the contract at `AGENT_REGISTRY_ADDRESS`
+- Call `OpenAuditRegistry.registerAgent()` on the contract at `OPENAUDIT_REGISTRY_ADDRESS`
 - Use test defaults if you don't specify parameters
 
 ## Method 2: Direct Tool Invocation (Programmatic)
@@ -65,7 +65,7 @@ print(result)
 result = register_agent(
     metadata_uri="ipfs://my-agent-metadata",
     agent_name="my-awesome-agent",
-    initial_operator=None  # Will use wallet address
+    # OpenAuditRegistry ignores initial_operator; omitted here
 )
 print(result)
 ```
@@ -85,12 +85,12 @@ agent = create_agent_executor(
 
 # For new API (LangChain v1.0+)
 result = agent.invoke({
-    "messages": [HumanMessage(content="Register this agent in the AgentRegistry")]
+    "messages": [HumanMessage(content="Register this agent in the OpenAuditRegistry")]
 })
 
 # For old API
 result = agent.invoke({
-    "input": "Register this agent in the AgentRegistry"
+    "input": "Register this agent in the OpenAuditRegistry"
 })
 
 print(result)
@@ -113,10 +113,10 @@ On success, you'll get a JSON response like:
   "tx_hash": "0x...",
   "agent_name": "agent-local-test",
   "metadata_uri": "ipfs://test-agent-metadata",
-  "initial_operator": "0x...",
+  "owner": "0x...",
   "agent_id": 1,
   "tba": "0x...",
-  "registry": "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9"
+  "registry": "0xYourRegistryAddress"
 }
 ```
 
@@ -182,8 +182,7 @@ print(result)
   "agent_id": 1,
   "tba": "0x...",
   "owner": "0x...",
-  "operator": "0x...",
-  "registry": "0xDc64a140Aa3E981100a9becA4E685f962f0cF6C9"
+  "registry": "0xYourRegistryAddress"
 }
 ```
 
@@ -213,13 +212,13 @@ After registration, verify:
    - Make sure Anvil is running on port 8545
    - Check that `OPENAUDIT_WALLET_RPC_URL` is correct
 
-3. **"AgentNameTaken" error**
+3. **"NameTaken" error**
    - The agent name is already registered
    - Try a different name or use the default
 
 4. **Transaction fails**
    - Make sure the wallet has ETH (Anvil accounts have ETH by default)
-   - Check that the AgentRegistry address is correct
+   - Check that the OpenAuditRegistry address is correct
 
 ## What Happens When Registered
 
@@ -227,6 +226,6 @@ After registration, verify:
 2. A Token Bound Account (TBA) is created for the agent
 3. An ENS subdomain is registered: `{agent_name}.openaudit.eth`
 4. The TBA address is set as the ENS address resolution
-5. Initial text records are set (score=0, model=unknown)
+5. Initial text records are set (score=0)
 
 You can then use the TBA address to participate in bounties!
