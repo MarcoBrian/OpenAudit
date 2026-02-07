@@ -1048,19 +1048,66 @@ def _check_registration_impl(
 
         account = w3.eth.account.from_key(private_key)
         wallet_address = account.address
+        wallet_checksum = w3.to_checksum_address(wallet_address)
 
-        # Try to find agent by checking if wallet owns any agent NFTs
-        # We'll check by trying to find the TBA that might be associated
-        # For now, return a message suggesting to use specific parameters
+        # Check if the wallet itself is a registered TBA
+        try:
+            is_registered_tba = contract.functions.isRegisteredAgent(wallet_checksum).call()
+        except Exception:
+            is_registered_tba = False
+
+        if is_registered_tba:
+            agent_id_from_tba = contract.functions.tbaToAgentId(wallet_checksum).call()
+            if agent_id_from_tba > 0:
+                agent_info = contract.functions.getAgent(agent_id_from_tba).call()
+                return json.dumps({
+                    "status": "registered",
+                    "tba": wallet_checksum,
+                    "agent_id": agent_id_from_tba,
+                    "name": agent_info[0],
+                    "owner": agent_info[2],
+                    "operator": agent_info[3],
+                    **result,
+                })
+            return json.dumps({
+                "status": "registered",
+                "tba": wallet_checksum,
+                "agent_id": None,
+                **result,
+            })
+
+        # Otherwise, scan registered agents to see if this wallet is owner or operator
         total = contract.functions.totalAgents().call()
+        try:
+            total_int = int(total)
+        except (TypeError, ValueError):
+            total_int = 0
+
+        for agent_id in range(1, total_int + 1):
+            try:
+                agent_info = contract.functions.getAgent(agent_id).call()
+            except Exception:
+                continue
+            owner = str(agent_info[2]).lower()
+            operator = str(agent_info[3]).lower()
+            if owner == wallet_checksum.lower() or operator == wallet_checksum.lower():
+                return json.dumps({
+                    "status": "registered",
+                    "agent_id": agent_id,
+                    "name": agent_info[0],
+                    "tba": agent_info[1],
+                    "owner": agent_info[2],
+                    "operator": agent_info[3],
+                    "wallet_address": wallet_address,
+                    "total_agents": total_int,
+                    **result,
+                })
+
         return json.dumps({
-            "status": "info",
-            "message": (
-                f"No specific agent specified. Total agents registered: {total}. "
-                "Use agent_name, agent_id, or tba_address to check a specific agent."
-            ),
+            "status": "not_registered",
+            "message": "No registered agent found for this wallet address.",
             "wallet_address": wallet_address,
-            "total_agents": total,
+            "total_agents": total_int,
             **result,
         })
 
