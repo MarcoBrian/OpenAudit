@@ -110,6 +110,16 @@ contract OpenAuditRegistry is ERC721, Ownable, ReentrancyGuard {
         parentNode = _parentNode;
     }
 
+    // ── Admin Functions ──────────────────────────────────────────────────────
+
+    /**
+     * @notice Allows owner to transfer the ENS parent node to a new address.
+     * Useful for recovering the domain if a new registry is deployed.
+     */
+    function transferENSNode(address newOwner) external onlyOwner {
+        ensRegistry.setOwner(parentNode, newOwner);
+    }
+
     // ── Agent Registration ───────────────────────────────────────────────────
 
     /**
