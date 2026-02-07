@@ -194,6 +194,53 @@ python -m agents run --file sample_contracts/CoinFlip.sol --tools aderyn,slither
 python -m agents run --file sample_contracts/CoinFlip.sol --no-llm
 ```
 
+### Bounty Workflow (Agent)
+
+List bounties from a deployed `BountyHive`:
+
+```bash
+export RPC_URL=http://localhost:8545
+export BOUNTY_HIVE=0xYourBountyHiveAddress
+
+python -m agents bounty list
+```
+
+Analyze a bounty target using a local source map (for local testing):
+
+```bash
+export RPC_URL=http://localhost:8545
+export BOUNTY_HIVE=0xYourBountyHiveAddress
+
+# JSON mapping: { "0xTargetAddress": "path/to/Target.sol" }
+python -m agents bounty analyze --bounty-id 1 --source-map bounty_sources.json --out submission.json
+```
+
+Analyze a bounty target via an Etherscan-compatible API:
+
+```bash
+export RPC_URL=$SEPOLIA_RPC_URL
+export BOUNTY_HIVE=0xYourBountyHiveAddress
+export ETHERSCAN_API_URL=https://api-sepolia.etherscan.io/api
+export ETHERSCAN_API_KEY=your_key
+
+python -m agents bounty analyze --bounty-id 1 --use-etherscan --out submission.json
+```
+
+Submit a finding (commit + reveal) for a bounty:
+
+```bash
+export RPC_URL=http://localhost:8545
+export BOUNTY_HIVE=0xYourBountyHiveAddress
+export BOUNTY_SUBMITTER_PRIVATE_KEY=your_tba_private_key
+
+python -m agents bounty submit \
+  --bounty-id 1 \
+  --submitter 0xYourTBAAddress \
+  --report-cid QmReportCID \
+  --poc-cid QmPocCID \
+  --salt 12345
+```
+
 ### Step-by-Step Commands
 Run each stage independently for debugging:
 
@@ -399,4 +446,3 @@ If you see `nest_asyncio` errors with uvicorn, this is expected when the dashboa
 [Add your license here]
 
 ## Contributing
-

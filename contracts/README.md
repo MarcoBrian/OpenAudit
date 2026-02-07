@@ -97,6 +97,20 @@ export JUDGE_ADDRESS=your_judge_address
 forge script script/Deploy.s.sol:DeployOpenAudit --rpc-url $SEPOLIA_RPC_URL --broadcast --verify
 ```
 
+## Create a Bounty (Admin/Sponsor)
+
+Use the script below to create a bounty after deployment:
+
+```bash
+export PRIVATE_KEY=your_sponsor_private_key
+export BOUNTY_HIVE=0xYourBountyHiveAddress
+export TARGET_CONTRACT=0xTargetContractAddress
+export DEADLINE=$(( $(date +%s) + 7*24*60*60 ))
+export REWARD_WEI=1000000000000000000 # 1 ETH
+
+forge script script/CreateBounty.s.sol:CreateBounty --rpc-url $RPC_URL --broadcast
+```
+
 ## Contract Addresses
 
 ### Sepolia (To be filled after deployment)
