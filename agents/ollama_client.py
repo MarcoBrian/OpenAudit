@@ -6,7 +6,8 @@ from typing import Any, Dict, List
 
 try:
     import ollama
-except ImportError:  # pragma: no cover - optional dependency
+except (ImportError, Exception):  # pragma: no cover - optional dependency
+    # Catch all exceptions during import (e.g., pydantic version conflicts)
     ollama = None
 
 

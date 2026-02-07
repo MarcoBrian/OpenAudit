@@ -146,6 +146,27 @@ OPENAUDIT_WALLET_CHAIN_ID=84532
 OPENAUDIT_WALLET_RPC_URL=https://sepolia.base.org
 ```
 
+#### OpenAudit Registry (On-chain)
+```bash
+OPENAUDIT_REGISTRY_ADDRESS=0xYourRegistryAddress
+RPC_URL=http://localhost:8545
+```
+
+#### Bounty Workflow (CLI)
+```bash
+BOUNTY_SOURCE_MAP=./bounty_sources.json
+BOUNTY_SUBMITTER_PRIVATE_KEY=your_private_key
+ETHERSCAN_API_URL=https://api-sepolia.etherscan.io/api
+ETHERSCAN_API_KEY=your_key
+```
+
+#### Pinata IPFS (Optional)
+```bash
+PINATA_JWT=your_pinata_jwt
+PINATA_GATEWAY_URL=https://gateway.pinata.cloud
+NEXT_PUBLIC_PINATA_GATEWAY=https://your-gateway.mypinata.cloud
+```
+
 #### Tool Overrides (Optional)
 ```bash
 # Aderyn command override
@@ -192,6 +213,50 @@ python -m agents run --file sample_contracts/CoinFlip.sol --tools aderyn,slither
 
 # Heuristic-only (no LLM)
 python -m agents run --file sample_contracts/CoinFlip.sol --no-llm
+```
+
+### Bounty Workflow (Agent)
+
+List bounties from a deployed `OpenAuditRegistry`:
+
+```bash
+export RPC_URL=http://localhost:8545
+export OPENAUDIT_REGISTRY_ADDRESS=0xYourRegistryAddress
+
+python -m agents bounty list
+```
+
+Analyze a bounty target using a local source map (for local testing):
+
+```bash
+export RPC_URL=http://localhost:8545
+export OPENAUDIT_REGISTRY_ADDRESS=0xYourRegistryAddress
+
+# JSON mapping: { "0xTargetAddress": "path/to/Target.sol" }
+python -m agents bounty analyze --bounty-id 1 --source-map bounty_sources.json --out submission.json
+```
+
+Analyze a bounty target via an Etherscan-compatible API:
+
+```bash
+export RPC_URL=$SEPOLIA_RPC_URL
+export OPENAUDIT_REGISTRY_ADDRESS=0xYourRegistryAddress
+export ETHERSCAN_API_URL=https://api-sepolia.etherscan.io/api
+export ETHERSCAN_API_KEY=your_key
+
+python -m agents bounty analyze --bounty-id 1 --use-etherscan --out submission.json
+```
+
+Submit a finding for a bounty:
+
+```bash
+export RPC_URL=http://localhost:8545
+export OPENAUDIT_REGISTRY_ADDRESS=0xYourRegistryAddress
+export BOUNTY_SUBMITTER_PRIVATE_KEY=your_private_key
+
+python -m agents bounty submit \
+  --bounty-id 1 \
+  --report-cid QmReportCID
 ```
 
 ### Step-by-Step Commands
@@ -399,4 +464,3 @@ If you see `nest_asyncio` errors with uvicorn, this is expected when the dashboa
 [Add your license here]
 
 ## Contributing
-

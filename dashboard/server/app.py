@@ -279,13 +279,13 @@ def list_ipfs_reports() -> JSONResponse:
 async def pin_report(request: Request) -> JSONResponse:
     """Pin an arbitrary JSON report to IPFS and return its CID.
 
-    This is the endpoint the agent should call **before** ``commitFinding``
+    This is the endpoint the agent should call **before** ``submitFinding``
     on-chain.  The flow is:
 
     1. Agent builds its bug-report JSON.
     2. ``POST /api/ipfs/pin`` with ``{ "report": <report_json>, "name": "<optional_name>" }``
     3. Server pins to Pinata, returns ``{ "cid": "...", "gateway_url": "..." }``.
-    4. Agent calls ``commitFinding(bountyId, cid)`` on-chain.
+    4. Agent calls ``submitFinding(bountyId, cid)`` on-chain.
     """
     body = await request.json()
 
