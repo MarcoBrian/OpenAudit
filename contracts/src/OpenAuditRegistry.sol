@@ -2,17 +2,22 @@
 pragma solidity ^0.8.20;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+
+import "erc6551/interfaces/IERC6551Registry.sol";
+import "./interfaces/IENSRegistry.sol";
 
 /**
  * @title OpenAuditRegistry
- * @notice Hackathon MVP – single contract for agents, bounties, findings & reputation
+ * @notice Hackathon MVP – agents (with TBA + ENS), bounties, findings & reputation
  */
-contract OpenAuditRegistry is Ownable, ReentrancyGuard {
+contract OpenAuditRegistry is ERC721, Ownable, ReentrancyGuard {
     // ── Types ────────────────────────────────────────────────────────────────
 
     struct Agent {
         address owner;
+        address tba;              // ERC-6551 Token Bound Account
         string  name;
         string  metadataURI;      // ipfs://…
         uint256 totalScore;
@@ -38,7 +43,7 @@ contract OpenAuditRegistry is Ownable, ReentrancyGuard {
 
     // ── Events ───────────────────────────────────────────────────────────────
 
-    event AgentRegistered(uint256 indexed agentId, address indexed owner, string name);
+    event AgentRegistered(uint256 indexed agentId, address indexed owner, address indexed tba, string name);
     event BountyCreated(uint256 indexed bountyId, address indexed sponsor, uint256 reward, uint256 deadline);
     event BountyCancelled(uint256 indexed bountyId);
     event FindingSubmitted(uint256 indexed bountyId, address indexed agent, string reportCID);
@@ -49,6 +54,7 @@ contract OpenAuditRegistry is Ownable, ReentrancyGuard {
 
     error NotRegistered();
     error AlreadyRegistered();
+    error NameTaken();
     error EmptyValue();
     error BountyNotActive();
     error DeadlinePassed();
@@ -59,6 +65,14 @@ contract OpenAuditRegistry is Ownable, ReentrancyGuard {
     error NoFinding();
     error TransferFailed();
 
+    // ── Immutables ───────────────────────────────────────────────────────────
+
+    IERC6551Registry public immutable erc6551Registry;
+    address          public immutable tbaImplementation;
+    IENS             public immutable ensRegistry;
+    IENSResolver     public immutable ensResolver;
+    bytes32          public immutable parentNode;        // namehash("openaudit.eth")
+
     // ── State ────────────────────────────────────────────────────────────────
 
     uint256 public nextAgentId = 1;
@@ -66,7 +80,10 @@ contract OpenAuditRegistry is Ownable, ReentrancyGuard {
     uint256 public constant MIN_REWARD = 0.001 ether;
 
     mapping(uint256 => Agent)   public agents;
-    mapping(address => uint256) public addressToAgentId;
+    mapping(address => uint256) public ownerToAgentId;       // owner addr  → agentId
+    mapping(address => uint256) public tbaToAgentId;          // TBA addr    → agentId
+    mapping(string  => uint256) public nameToAgentId;         // agent name  → agentId
+    mapping(uint256 => bytes32) public agentENSNode;          // agentId     → ENS node
 
     mapping(uint256 => Bounty)  public bounties;
 
@@ -79,37 +96,94 @@ contract OpenAuditRegistry is Ownable, ReentrancyGuard {
 
     // ── Constructor ──────────────────────────────────────────────────────────
 
-    constructor() Ownable(msg.sender) {}
+    constructor(
+        address _erc6551Registry,
+        address _tbaImplementation,
+        address _ensRegistry,
+        address _ensResolver,
+        bytes32 _parentNode
+    ) ERC721("OpenAudit Agent", "OAA") Ownable(msg.sender) {
+        erc6551Registry = IERC6551Registry(_erc6551Registry);
+        tbaImplementation = _tbaImplementation;
+        ensRegistry = IENS(_ensRegistry);
+        ensResolver = IENSResolver(_ensResolver);
+        parentNode = _parentNode;
+    }
 
     // ── Agent Registration ───────────────────────────────────────────────────
 
+    /**
+     * @notice Register an AI agent – mints NFT, creates TBA, assigns ENS subdomain
+     * @param name   Unique agent name (becomes name.openaudit.eth)
+     * @param metadataURI  IPFS URI for agent metadata
+     */
     function registerAgent(
         string calldata name,
         string calldata metadataURI
-    ) external returns (uint256 agentId) {
-        if (bytes(name).length == 0) revert EmptyValue();
-        if (addressToAgentId[msg.sender] != 0) revert AlreadyRegistered();
+    ) external nonReentrant returns (uint256 agentId, address tba) {
+        if (bytes(name).length == 0 || bytes(name).length > 32) revert EmptyValue();
+        if (ownerToAgentId[msg.sender] != 0) revert AlreadyRegistered();
+        if (nameToAgentId[name] != 0) revert NameTaken();
 
         agentId = nextAgentId++;
+
+        // 1. Mint agent NFT
+        _mint(msg.sender, agentId);
+
+        // 2. Create TBA via ERC-6551
+        tba = erc6551Registry.createAccount(
+            tbaImplementation,
+            bytes32(0),
+            block.chainid,
+            address(this),
+            agentId
+        );
+
+        // 3. Register ENS subdomain (name.openaudit.eth)
+        bytes32 labelHash = keccak256(bytes(name));
+        bytes32 node = keccak256(abi.encodePacked(parentNode, labelHash));
+        agentENSNode[agentId] = node;
+
+        ensRegistry.setSubnodeRecord(
+            parentNode,
+            labelHash,
+            address(this),
+            address(ensResolver),
+            0
+        );
+        ensResolver.setAddr(node, tba);
+        ensResolver.setText(node, "score", "0");
+
+        // 4. Store agent data
         agents[agentId] = Agent({
             owner: msg.sender,
+            tba: tba,
             name: name,
             metadataURI: metadataURI,
             totalScore: 0,
             findingsCount: 0,
             registered: true
         });
-        addressToAgentId[msg.sender] = agentId;
+        ownerToAgentId[msg.sender] = agentId;
+        tbaToAgentId[tba] = agentId;
+        nameToAgentId[name] = agentId;
 
-        emit AgentRegistered(agentId, msg.sender, name);
+        emit AgentRegistered(agentId, msg.sender, tba, name);
     }
 
     function isRegistered(address addr) external view returns (bool) {
-        return addressToAgentId[addr] != 0;
+        return ownerToAgentId[addr] != 0 || tbaToAgentId[addr] != 0;
     }
 
     function getAgent(uint256 agentId) external view returns (Agent memory) {
         return agents[agentId];
+    }
+
+    /// @notice Look up an agent's TBA by their name
+    function resolveName(string calldata name) external view returns (address) {
+        uint256 agentId = nameToAgentId[name];
+        if (agentId == 0) return address(0);
+        return agents[agentId].tba;
     }
 
     // ── Bounty Management ────────────────────────────────────────────────────
@@ -148,32 +222,41 @@ contract OpenAuditRegistry is Ownable, ReentrancyGuard {
         emit BountyCancelled(bountyId);
     }
 
-    // ── Submit Finding (pin to IPFS first, then submit CID here) ─────────
+    // ── Submit Finding ───────────────────────────────────────────────────────
 
+    /**
+     * @notice Submit a finding – caller can be agent owner OR their TBA
+     * @dev Pin the report to IPFS first, then submit the CID here
+     */
     function submitFinding(
         uint256 bountyId,
         string calldata reportCID
     ) external {
         if (bytes(reportCID).length == 0) revert EmptyValue();
-        if (addressToAgentId[msg.sender] == 0) revert NotRegistered();
+
+        // Accept submission from either agent owner or TBA
+        address submitter = msg.sender;
+        if (ownerToAgentId[submitter] == 0 && tbaToAgentId[submitter] == 0) {
+            revert NotRegistered();
+        }
 
         Bounty storage b = bounties[bountyId];
         if (!b.active) revert BountyNotActive();
         if (block.timestamp > b.deadline) revert DeadlinePassed();
-        if (findings[bountyId][msg.sender].submittedAt != 0) revert AlreadySubmitted();
+        if (findings[bountyId][submitter].submittedAt != 0) revert AlreadySubmitted();
 
-        findings[bountyId][msg.sender] = Finding({
-            agent: msg.sender,
+        findings[bountyId][submitter] = Finding({
+            agent: submitter,
             reportCID: reportCID,
             submittedAt: block.timestamp
         });
-        bountySubmitters[bountyId].push(msg.sender);
-        agentReportCIDs[msg.sender].push(reportCID);
+        bountySubmitters[bountyId].push(submitter);
+        agentReportCIDs[submitter].push(reportCID);
 
-        emit FindingSubmitted(bountyId, msg.sender, reportCID);
+        emit FindingSubmitted(bountyId, submitter, reportCID);
     }
 
-    // ── Resolve Bounty (owner/judge picks winner) ────────────────────────
+    // ── Resolve Bounty ───────────────────────────────────────────────────────
 
     function resolveBounty(
         uint256 bountyId,
@@ -188,10 +271,16 @@ contract OpenAuditRegistry is Ownable, ReentrancyGuard {
         b.resolved = true;
         b.winner = winner;
 
+        // Resolve agentId from either owner or TBA
+        uint256 agentId = ownerToAgentId[winner];
+        if (agentId == 0) agentId = tbaToAgentId[winner];
+
         // Update reputation
-        uint256 agentId = addressToAgentId[winner];
         agents[agentId].totalScore += reputationScore;
         agents[agentId].findingsCount += 1;
+
+        // Update ENS score text record
+        _updateENSScore(agentId);
 
         emit ReputationUpdated(winner, agents[agentId].totalScore, agents[agentId].findingsCount);
 
@@ -213,11 +302,32 @@ contract OpenAuditRegistry is Ownable, ReentrancyGuard {
     }
 
     function getReputation(address agent) external view returns (uint256 totalScore, uint256 findingsCount, uint256 avgScore) {
-        uint256 agentId = addressToAgentId[agent];
+        uint256 agentId = ownerToAgentId[agent];
+        if (agentId == 0) agentId = tbaToAgentId[agent];
         if (agentId == 0) return (0, 0, 0);
         Agent storage a = agents[agentId];
         totalScore = a.totalScore;
         findingsCount = a.findingsCount;
         avgScore = findingsCount > 0 ? totalScore / findingsCount : 0;
+    }
+
+    // ── Internal ─────────────────────────────────────────────────────────────
+
+    function _updateENSScore(uint256 agentId) internal {
+        bytes32 node = agentENSNode[agentId];
+        if (node == bytes32(0)) return;
+        Agent storage a = agents[agentId];
+        uint256 avg = a.findingsCount > 0 ? a.totalScore / a.findingsCount : 0;
+        try ensResolver.setText(node, "score", _toString(avg)) {} catch {}
+    }
+
+    function _toString(uint256 value) internal pure returns (string memory) {
+        if (value == 0) return "0";
+        uint256 temp = value;
+        uint256 digits;
+        while (temp != 0) { digits++; temp /= 10; }
+        bytes memory buf = new bytes(digits);
+        while (value != 0) { digits--; buf[digits] = bytes1(uint8(48 + value % 10)); value /= 10; }
+        return string(buf);
     }
 }
