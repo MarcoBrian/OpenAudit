@@ -60,8 +60,13 @@ contract DeployOpenAudit is Script {
         );
         console.log("OpenAuditRegistry:", address(registry));
 
-        // Give registry ownership of the ENS parent node (for mock)
-        MockENSRegistry(ensRegAddr).setNodeOwner(parentNode, address(registry));
+        // Give registry ownership of the ENS parent node (only if using mocks)
+        if (vm.envOr("ENS_REGISTRY", address(0)) == address(0)) {
+            MockENSRegistry(ensRegAddr).setNodeOwner(parentNode, address(registry));
+            console.log("Set Mock ENS node owner to registry");
+        } else {
+            console.log("Using real ENS. Remember to manually set registry as owner of the parent node!");
+        }
 
         // Optionally transfer ownership to a judge address
         address judge = vm.envOr("JUDGE_ADDRESS", deployer);
