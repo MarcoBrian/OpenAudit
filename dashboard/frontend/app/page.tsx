@@ -4,6 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import Link from "next/link";
+import { ConnectKitButton } from "connectkit";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
@@ -337,12 +339,11 @@ export default function Home() {
             <div className="muted">Autonomous smart‑contract security agent</div>
           </div>
         </div>
-        <div className="header-right">
-          <div className="badge-group">
-            <div className="badge">Tools: {tools || "aderyn"}</div>
-            <div className="badge">{useLlm ? "LLM: ON" : "LLM: OFF"}</div>
-          </div>
-          <div className="status-pill">{statusLabel}</div>
+        <div className="header-right" style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
+          <Link href="/bounties" className="btn-link" style={{ color: "#6877ed", fontWeight: 600, textDecoration: "none" }}>
+            Bounty Dashboard &rarr;
+          </Link>
+          <ConnectKitButton />
         </div>
       </header>
 
