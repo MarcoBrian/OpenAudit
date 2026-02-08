@@ -19,10 +19,15 @@ def call_ollama(
     timeout: int = 60,
 ) -> List[Dict[str, Any]]:
     api_base = base_url or os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+    api_key = os.getenv("OLLAMA_API_KEY")
     if ollama is None:
         raise RuntimeError("ollama python library is not installed")
 
-    client = ollama.Client(host=api_base)
+    headers = None
+    if api_key:
+        headers = {"Authorization": f"Bearer {api_key}"}
+
+    client = ollama.Client(host=api_base, headers=headers)
     payload = client.chat(
         model=model,
         messages=[{"role": "user", "content": prompt}],
