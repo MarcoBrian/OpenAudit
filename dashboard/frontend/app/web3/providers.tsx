@@ -3,7 +3,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { WagmiProvider } from "wagmi";
 import { ConnectKitProvider } from "connectkit";
-import { wagmiConfig, arcTestnet } from "./config";
+import { wagmiConfig, HOME_CHAIN } from "./config";
 
 const queryClient = new QueryClient();
 
@@ -13,7 +13,7 @@ export function Web3Provider({ children }: { children: React.ReactNode }) {
       <QueryClientProvider client={queryClient}>
         <ConnectKitProvider
           theme="soft"
-          options={{ initialChainId: arcTestnet.id }}
+          options={{ initialChainId: HOME_CHAIN.id }}
         >
           {children}
         </ConnectKitProvider>

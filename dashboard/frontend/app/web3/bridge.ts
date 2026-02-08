@@ -1,11 +1,12 @@
 /**
  * Bridge Kit service — wraps Circle Bridge Kit for cross-chain USDC settlement.
  *
- * After a bounty is resolved on Arc, USDC lands in the relay wallet.
- * This module bridges that USDC from Arc → the winner's preferred chain.
+ * Contracts live on Base Sepolia. After a bounty is resolved, USDC lands
+ * in the relay wallet on Base Sepolia. This module bridges that USDC from
+ * Base Sepolia → the winner's preferred chain using Circle Bridge Kit (CCTP).
  */
 
-import { PAYOUT_CHAIN_MAP } from "./config";
+import { PAYOUT_CHAIN_MAP, SOURCE_CHAIN } from "./config";
 
 export type BridgeStatus =
   | { state: "idle" }
@@ -35,8 +36,8 @@ export function resolveBridgeChain(payoutChain: string): string | undefined {
  */
 export function getSupportedPayoutChains(): { value: string; label: string }[] {
   return [
-    { value: "arc", label: "Arc (same chain)" },
-    { value: "base", label: "Base" },
+    { value: "base", label: "Base (same chain — no bridge)" },
+    { value: "arc", label: "Arc" },
     { value: "ethereum", label: "Ethereum" },
     { value: "arbitrum", label: "Arbitrum" },
   ];
@@ -61,8 +62,8 @@ export async function bridgePayout(
 ): Promise<void> {
   const destChain = resolveBridgeChain(request.payoutChain);
 
-  // If destination is Arc itself, no bridging needed
-  if (!destChain || destChain === "Arc_Testnet") {
+  // If destination is Base Sepolia itself, no bridging needed
+  if (!destChain || destChain === SOURCE_CHAIN) {
     onStatusChange({
       state: "complete",
       txHash: "same-chain",

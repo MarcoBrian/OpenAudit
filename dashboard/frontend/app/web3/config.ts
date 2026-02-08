@@ -32,38 +32,52 @@ export const arcTestnet: Chain = {
 
 export const CONTRACTS = {
   REGISTRY: (process.env.NEXT_PUBLIC_REGISTRY_ADDRESS ||
-    "0xb3b612a624c68672befd864935d09d85758d4024") as `0x${string}`,
+    "0x5f712628FA58d4DdBbdD3e681232f1272dd9b688") as `0x${string}`,
   USDC: (process.env.NEXT_PUBLIC_USDC_ADDRESS ||
-    "0x1B26905E8bF393d27A2AAcf971550B322321426a") as `0x${string}`,
+    "0x036CbD53842c5426634e7929541eC2318f3dCF7e") as `0x${string}`,
 } as const;
 
 // ── Supported chains ────────────────────────────────────────────────────────
 
 export const SUPPORTED_CHAINS = [
-  arcTestnet,
   baseSepolia,
+  arcTestnet,
   sepolia,
   arbitrumSepolia,
 ] as const;
 
+/** The primary chain where the Registry lives */
+export const HOME_CHAIN = baseSepolia;
+
 // ── Bridge Kit chain name mapping ──────────────────────────────────────────
+
+/** Source chain where contracts + USDC live */
+export const SOURCE_CHAIN = "Base_Sepolia" as const;
+
+/** USDC address on Base Sepolia */
+export const BASE_SEPOLIA_USDC = "0x036CbD53842c5426634e7929541eC2318f3dCF7e";
 
 /** Maps ENS payout_chain text record values → Bridge Kit chain identifiers */
 export const PAYOUT_CHAIN_MAP: Record<string, string> = {
-  arc: "Arc_Testnet",
-  "arc-testnet": "Arc_Testnet",
+  // Base Sepolia (same-chain, no bridge needed)
   base: "Base_Sepolia",
   "base-sepolia": "Base_Sepolia",
+  // Arc
+  arc: "Arc_Testnet",
+  "arc-testnet": "Arc_Testnet",
+  // Ethereum
   ethereum: "Ethereum_Sepolia",
   sepolia: "Ethereum_Sepolia",
+  "ethereum-sepolia": "Ethereum_Sepolia",
+  // Arbitrum
   arbitrum: "Arbitrum_Sepolia",
   "arbitrum-sepolia": "Arbitrum_Sepolia",
 };
 
 /** Human-readable chain labels for the UI */
 export const CHAIN_LABELS: Record<string, string> = {
-  arc: "Arc",
   base: "Base",
+  arc: "Arc",
   ethereum: "Ethereum",
   arbitrum: "Arbitrum",
 };

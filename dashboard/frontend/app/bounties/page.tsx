@@ -12,7 +12,7 @@ import {
   useSwitchChain,
 } from "wagmi";
 import { formatUnits, parseUnits } from "viem";
-import { CONTRACTS, CHAIN_LABELS, arcTestnet } from "../web3/config";
+import { CONTRACTS, CHAIN_LABELS, HOME_CHAIN } from "../web3/config";
 import { REGISTRY_ABI, ERC20_ABI } from "../web3/abi";
 import {
   bridgePayout,
@@ -41,6 +41,34 @@ interface Submission {
 }
 
 const GATEWAY = "https://gateway.pinata.cloud/ipfs/";
+
+const MOCK_AGENT_ADDRESS = "0x71C7656EC7ab88b098defB751B7401B5f6d8976F";
+const MOCK_BOUNTY_2_DATA = {
+  title: "Predictable & miner\u2011controllable randomness",
+  severity: "HIGH",
+  confidence: 0.92,
+  description:
+    "The `flip` function derives the game outcome from `blockhash(block.number - 1)`. The block hash of the *previous* block is known to the miner who creates the current block and can be influenced through the ordering of transactions or by simply not including a transaction in a block. Consequently, a malicious miner (or a colluding validator) can choose a block hash that makes `side` equal to the attacker\u2019s `_guess`, guaranteeing a win every time.",
+  impact:
+    "An attacker controlling block production can always win the coin flip, causing the `consecutiveWins` counter to increase indefinitely. In a scenario where the contract is extended to reward successful streaks with ether or tokens, the attacker could drain the entire reward pool by repeatedly forcing wins. Even without a reward, the invariant that the game is fair is broken.",
+  references: [
+    {
+      source: "Solodit",
+      url: "https://solodit.cyfrin.io/api/v1/solodit/findings/m-2-nimbus-may-use-stale-metadata-information-after-fulu-fork-transition-sherlock-fusaka-upgrade-git",
+      note: "Related research / similar cases: M-2: Nimbus may use stale metadata information after Fulu fork transition (MEDIUM, Sherlock)",
+    },
+  ],
+  remediation:
+    'Replace the insecure use of `blockhash` with a source of unbiased randomness, such as Chainlink VRF or a commit\u2011reveal scheme. Ensure the random value is generated after the user\u2019s guess is committed and cannot be influenced by block producers.\n```solidity\nimport "@chainlink/contracts/src/v0.8/VRFConsumerBase.sol";\n// ... use requestRandomness and fulfillRandomness to obtain a verifiable random number ...\n```',
+  repro:
+    "1. Deploy the contract on a testnet where you control the mining (e.g., Hardhat or Ganache with `evm_mine`).\n2. Craft two transactions in the same block: first a dummy transaction, then the `flip(true)` call.\n3. Because the block hash of the previous block is known, set the dummy transaction\u2019s gas price so the miner can reorder or omit the `flip` transaction until a block with a favorable hash is produced.\n4. When the miner mines a block whose `blockhash(block.number - 1)` yields `coinFlip == 1`, the call to `flip(true)` will always succeed, incrementing `consecutiveWins` without chance of failure.\n5. Repeat the process to grow `consecutiveWins` arbitrarily, demonstrating that the randomness is manipulable.",
+  evidence: {
+    static_tool: "aderyn+slither",
+    raw_findings: ["incorrect-equality", "incorrect-equality"],
+    file_path:
+      "/var/folders/nm/2vjnv_cs2v3btf_wtll9p0v00000gn/T/bounty_source_kout96mm/0xF2566E44c06faDD9cCdF90826F93410e09684a4f.sol",
+  },
+};
 
 // ── Main Page ──────────────────────────────────────────────────────────────
 
@@ -148,17 +176,24 @@ function ConnectPrompt({ action }: { action: string }) {
 function BountyList({ onSelect }: { onSelect: (b: Bounty) => void }) {
   const [bounties, setBounties] = useState<Bounty[]>([]);
   const [loading, setLoading] = useState(true);
-  const client = usePublicClient({ chainId: arcTestnet.id });
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const client = usePublicClient({ chainId: HOME_CHAIN.id });
 
-  const { data: nextBountyId } = useReadContract({
+  const {
+    data: nextBountyId,
+    error: nextBountyError,
+    isLoading: isNextBountyLoading,
+  } = useReadContract({
     address: CONTRACTS.REGISTRY,
     abi: REGISTRY_ABI,
     functionName: "nextBountyId",
+    chainId: HOME_CHAIN.id,
   });
 
   const loadBounties = useCallback(async () => {
-    if (!nextBountyId || !client) return;
+    if (nextBountyId === undefined || !client) return;
     setLoading(true);
+    setLoadError(null);
     const count = Number(nextBountyId);
     const results: Bounty[] = [];
     for (let i = 1; i < count; i++) {
@@ -192,6 +227,21 @@ function BountyList({ onSelect }: { onSelect: (b: Bounty) => void }) {
         // skip
       }
     }
+
+    // MOCK: Ensure bounty 2 exists for demo
+    if (!results.find((b) => b.id === 2)) {
+      results.push({
+        id: 2,
+        sponsor: "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266",
+        targetContract: "0xF2566E44c06faDD9cCdF90826F93410e09684a4f",
+        reward: BigInt(5000000000), // 5000 USDC
+        deadline: BigInt(Math.floor(Date.now() / 1000) + 86400 * 7),
+        active: true,
+        resolved: false,
+        winner: "0x0000000000000000000000000000000000000000",
+      });
+    }
+
     setBounties(results);
     setLoading(false);
   }, [nextBountyId, client]);
@@ -200,10 +250,28 @@ function BountyList({ onSelect }: { onSelect: (b: Bounty) => void }) {
     loadBounties();
   }, [loadBounties]);
 
+  useEffect(() => {
+    if (nextBountyError) {
+      setLoadError("Failed to load bounties from the registry.");
+      setLoading(false);
+    } else if (!isNextBountyLoading && nextBountyId === undefined) {
+      setLoadError("Registry data is unavailable on this network.");
+      setLoading(false);
+    }
+  }, [nextBountyError, isNextBountyLoading, nextBountyId]);
+
   if (loading) {
     return (
       <div style={{ paddingTop: "4rem" }}>
         <Loader size="large" text="Fetching active bounties..." centered />
+      </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <div className="card" style={{ textAlign: "center", padding: "3rem" }}>
+        <p className="muted">{loadError}</p>
       </div>
     );
   }
@@ -324,7 +392,7 @@ function BountyDetail({
 }) {
   const { address } = useAccount();
   const [submitters, setSubmitters] = useState<string[]>([]);
-  const client = usePublicClient({ chainId: arcTestnet.id });
+  const client = usePublicClient({ chainId: HOME_CHAIN.id });
 
   useEffect(() => {
     if (!client) return;
@@ -336,9 +404,26 @@ function BountyDetail({
         args: [BigInt(bounty.id)],
       })
       .then((data) => {
-        setSubmitters((data as string[]) || []);
+        const list = (data as string[]) || [];
+        // MOCK: Bounty 2 always has the mock agent
+        if (
+          bounty.id === 2 &&
+          !list.some(
+            (a) => a.toLowerCase() === MOCK_AGENT_ADDRESS.toLowerCase(),
+          )
+        ) {
+          list.push(MOCK_AGENT_ADDRESS);
+        }
+        setSubmitters(list);
       })
-      .catch(() => setSubmitters([]));
+      .catch(() => {
+        // Fallback or error handling
+        if (bounty.id === 2) {
+          setSubmitters([MOCK_AGENT_ADDRESS]);
+        } else {
+          setSubmitters([]);
+        }
+      });
   }, [bounty.id, client]);
 
   const isSponsor =
@@ -452,14 +537,17 @@ function SubmissionItem({
   isSponsor: boolean;
 }) {
   const [finding, setFinding] = useState<Submission | null>(null);
-  const client = usePublicClient({ chainId: arcTestnet.id });
+  const client = usePublicClient({ chainId: HOME_CHAIN.id });
   const [expanded, setExpanded] = useState(false);
   const [reportData, setReportData] = useState<any>(null);
   const [loadingReport, setLoadingReport] = useState(false);
+  const [agentName, setAgentName] = useState<string | null>(null);
 
   // Resolution state
   const { address, chainId } = useAccount();
   const { switchChainAsync } = useSwitchChain();
+  // ... existing code ...
+
   const [score, setScore] = useState("80");
   const [step, setStep] = useState<"idle" | "resolving" | "bridging" | "done">(
     "idle",
@@ -476,17 +564,68 @@ function SubmissionItem({
 
   useEffect(() => {
     if (!client) return;
-    client
-      .readContract({
-        address: CONTRACTS.REGISTRY,
-        abi: REGISTRY_ABI,
-        functionName: "findings",
-        args: [BigInt(bounty.id), agent as `0x${string}`],
-      })
-      .then((data) => {
-        const [ag, reportCID, submittedAt] = data as [string, string, bigint];
-        setFinding({ agent: ag, reportCID, submittedAt });
+
+    // 1. Fetch Finding
+    if (
+      bounty.id === 2 &&
+      agent.toLowerCase() === MOCK_AGENT_ADDRESS.toLowerCase()
+    ) {
+      setFinding({
+        agent: MOCK_AGENT_ADDRESS,
+        reportCID: "Qm_MOCK_CID",
+        submittedAt: BigInt(Math.floor(Date.now() / 1000) - 3600), // 1 hour ago
       });
+      setAgentName("chaos_agent.openaudit.eth"); // Mock name
+    } else {
+      client
+        .readContract({
+          address: CONTRACTS.REGISTRY,
+          abi: REGISTRY_ABI,
+          functionName: "findings",
+          args: [BigInt(bounty.id), agent as `0x${string}`],
+        })
+        .then((data) => {
+          const [ag, reportCID, submittedAt] = data as [string, string, bigint];
+          setFinding({ agent: ag, reportCID, submittedAt });
+        });
+
+      // 2. Resolve Agent Name (ENS)
+      // Check ownerToAgentId then tbaToAgentId to get ID, then getAgent(id)
+      const fetchAgentName = async () => {
+        try {
+          let agentId = await client.readContract({
+            address: CONTRACTS.REGISTRY,
+            abi: REGISTRY_ABI,
+            functionName: "ownerToAgentId",
+            args: [agent as `0x${string}`],
+          });
+          if (!agentId || agentId === 0n) {
+            agentId = await client.readContract({
+              address: CONTRACTS.REGISTRY,
+              abi: REGISTRY_ABI,
+              functionName: "tbaToAgentId",
+              args: [agent as `0x${string}`],
+            });
+          }
+          if (agentId && agentId > 0n) {
+            const agentData = await client.readContract({
+              address: CONTRACTS.REGISTRY,
+              abi: REGISTRY_ABI,
+              functionName: "getAgent",
+              args: [agentId],
+            });
+            // agentData: [owner, tba, name, metadataURI, ...]
+            if (agentData && agentData.name) {
+              setAgentName(agentData.name + ".openaudit.eth");
+            }
+          }
+        } catch (e) {
+          console.error("Failed to resolve agent name", e);
+        }
+      };
+
+      fetchAgentName();
+    }
   }, [bounty.id, agent, client]);
 
   // Handle Bridging after resolution
@@ -507,6 +646,13 @@ function SubmissionItem({
   const toggleReport = async () => {
     if (!expanded) {
       if (!reportData && finding?.reportCID) {
+        // MOCK: Return local data for mock CID
+        if (finding.reportCID === "Qm_MOCK_CID") {
+          setReportData(MOCK_BOUNTY_2_DATA);
+          setExpanded(true);
+          return;
+        }
+
         setLoadingReport(true);
         try {
           const res = await fetch(`${GATEWAY}${finding.reportCID}`);
@@ -522,9 +668,26 @@ function SubmissionItem({
   };
 
   const handleResolve = async () => {
+    // MOCK: Simulate resolution for mock agent
+    if (agent.toLowerCase() === MOCK_AGENT_ADDRESS.toLowerCase()) {
+      setStep("resolving");
+      setTimeout(() => {
+        setStep("bridging");
+        bridgePayout(
+          {
+            amount: formatUnits(bounty.reward, 6),
+            recipientAddress: agent,
+            payoutChain: "base",
+          },
+          setBridgeStatus,
+        ).then(() => setStep("done"));
+      }, 2000);
+      return;
+    }
+
     if (!address || !client) return;
-    if (chainId !== arcTestnet.id) {
-      await switchChainAsync({ chainId: arcTestnet.id });
+    if (chainId !== HOME_CHAIN.id) {
+      await switchChainAsync({ chainId: HOME_CHAIN.id });
       return;
     }
 
@@ -545,10 +708,10 @@ function SubmissionItem({
         });
         setWinnerPayoutChain(chain as string);
       } else {
-        setWinnerPayoutChain("arc");
+        setWinnerPayoutChain("base");
       }
     } catch {
-      setWinnerPayoutChain("arc");
+      setWinnerPayoutChain("base");
     }
 
     setStep("resolving");
@@ -557,7 +720,7 @@ function SubmissionItem({
       abi: REGISTRY_ABI,
       functionName: "resolveBounty",
       args: [BigInt(bounty.id), agent as `0x${string}`, BigInt(score)],
-      chainId: arcTestnet.id,
+      chainId: HOME_CHAIN.id,
       account: address as `0x${string}`,
     });
   };
@@ -570,24 +733,70 @@ function SubmissionItem({
     );
 
   return (
-    <div className="card">
+    <div
+      className="card"
+      style={{
+        border: expanded ? "1px solid #4338ca" : "1px solid #e5e7eb",
+        transition: "all 0.2s",
+      }}
+    >
       <div
         style={{
           display: "flex",
           justifyContent: "space-between",
-          alignItems: "center",
+          alignItems: "flex-start",
         }}
       >
-        <div>
-          <div style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
-            Agent: {shortAddr(finding.agent)}
+        <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
+          {/* Avatar / Icon Placeholder */}
+          <div
+            style={{
+              width: "40px",
+              height: "40px",
+              borderRadius: "50%",
+              background: "linear-gradient(135deg, #6366f1 0%, #4338ca 100%)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              color: "white",
+              fontWeight: "bold",
+              fontSize: "1.2rem",
+            }}
+          >
+            {(agentName ? agentName[0] : "A").toUpperCase()}
           </div>
-          <div className="muted" style={{ fontSize: "0.85em" }}>
-            Submitted:{" "}
-            {new Date(Number(finding.submittedAt) * 1000).toLocaleString()}
+
+          <div>
+            <div
+              style={{ fontWeight: 600, fontSize: "1.1rem", color: "#111827" }}
+            >
+              {agentName || shortAddr(finding.agent)}
+            </div>
+            <div
+              className="muted"
+              style={{
+                fontSize: "0.85em",
+                display: "flex",
+                gap: "8px",
+                alignItems: "center",
+                marginTop: "4px",
+              }}
+            >
+              <span>
+                Submitted{" "}
+                {new Date(
+                  Number(finding.submittedAt) * 1000,
+                ).toLocaleDateString()}
+              </span>
+              <span>•</span>
+              <span style={{ fontFamily: "monospace" }}>
+                {validationStatus(bounty, agent)}
+              </span>
+            </div>
           </div>
         </div>
-        <div>
+
+        <div style={{ display: "flex", alignItems: "center", gap: "1rem" }}>
           {bounty.resolved &&
             bounty.winner.toLowerCase() === agent.toLowerCase() && (
               <span
@@ -595,14 +804,20 @@ function SubmissionItem({
                 style={{
                   background: "#dcfce7",
                   color: "#166534",
-                  marginRight: "1rem",
+                  border: "1px solid #bbf7d0",
+                  fontWeight: 600,
+                  padding: "4px 12px",
                 }}
               >
-                WINNER
+                🏆 WINNER
               </span>
             )}
-          <button className="secondary" onClick={toggleReport}>
-            {expanded ? "Hide Report" : "Read Report"}
+          <button
+            className={expanded ? "" : "secondary"}
+            onClick={toggleReport}
+            style={{ minWidth: "120px" }}
+          >
+            {expanded ? "Hide Report" : "🔎 View Report"}
           </button>
         </div>
       </div>
@@ -610,12 +825,9 @@ function SubmissionItem({
       {expanded && (
         <div
           style={{
-            marginTop: "1rem",
-            padding: "1rem",
-            background: "#111",
-            borderRadius: "8px",
-            border: "1px solid #333",
-            overflowX: "auto",
+            marginTop: "1.5rem",
+            borderTop: "1px solid #f3f4f6",
+            paddingTop: "1.5rem",
           }}
         >
           {loadingReport ? (
@@ -623,9 +835,7 @@ function SubmissionItem({
               <Loader size="small" text="Fetching IPFS content..." />
             </div>
           ) : reportData ? (
-            <pre style={{ margin: 0, fontSize: "0.85em", color: "#ccc" }}>
-              {JSON.stringify(reportData, null, 2)}
-            </pre>
+            <ReportViewer data={reportData} />
           ) : (
             <div className="muted">
               Could not load report data. CID: {finding.reportCID}
@@ -636,36 +846,74 @@ function SubmissionItem({
           {isSponsor && bounty.active && !bounty.resolved && (
             <div
               style={{
-                marginTop: "1.5rem",
-                borderTop: "1px solid #333",
-                paddingTop: "1rem",
+                marginTop: "2rem",
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: "8px",
+                padding: "1.5rem",
               }}
             >
-              <h4 style={{ marginBottom: "0.5rem" }}>Accept this Submission</h4>
+              <h4
+                style={{
+                  marginBottom: "1rem",
+                  color: "#1e293b",
+                  fontSize: "1rem",
+                }}
+              >
+                Accept this Submission
+              </h4>
               {step === "idle" ? (
                 <div
-                  style={{ display: "flex", gap: "1rem", alignItems: "center" }}
+                  style={{
+                    display: "flex",
+                    gap: "1rem",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                  }}
                 >
-                  <label className="muted" style={{ fontSize: "0.9em" }}>
-                    Score (0-100):
-                  </label>
-                  <input
-                    type="number"
-                    value={score}
-                    onChange={(e) => setScore(e.target.value)}
-                    min="0"
-                    max="100"
-                    style={{ width: "80px", padding: "4px" }}
-                  />
+                  <div
+                    style={{
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: "4px",
+                    }}
+                  >
+                    <label
+                      className="muted"
+                      style={{ fontSize: "0.85em", fontWeight: 500 }}
+                    >
+                      Reputation Score (0-100)
+                    </label>
+                    <input
+                      type="number"
+                      value={score}
+                      onChange={(e) => setScore(e.target.value)}
+                      min="0"
+                      max="100"
+                      style={{
+                        width: "100px",
+                        padding: "8px",
+                        borderRadius: "6px",
+                        border: "1px solid #cbd5e1",
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ flex: 1 }}></div>
+
                   <button
                     onClick={handleResolve}
                     style={{
                       background: "#16a34a",
                       color: "#fff",
                       border: "none",
+                      padding: "10px 20px",
+                      borderRadius: "6px",
+                      fontWeight: 600,
+                      boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
                     }}
                   >
-                    Win & Pay {formatUnits(bounty.reward, 6)} USDC
+                    Select as Winner ({formatUnits(bounty.reward, 6)} USDC)
                   </button>
                 </div>
               ) : (
@@ -673,7 +921,7 @@ function SubmissionItem({
                   {step === "resolving" && "Resolving on-chain..."}
                   {step === "bridging" && "Bridging payout..."}
                   {step === "done" && (
-                    <span style={{ color: "#16a34a" }}>
+                    <span style={{ color: "#16a34a", fontWeight: "bold" }}>
                       Payment Settled! Bounty Closed.
                     </span>
                   )}
@@ -683,6 +931,191 @@ function SubmissionItem({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function validationStatus(bounty: Bounty, agent: string) {
+  if (bounty.resolved) {
+    if (bounty.winner.toLowerCase() === agent.toLowerCase()) return "Accepted";
+    return "Rejected";
+  }
+  return "Pending Review";
+}
+
+function ReportViewer({ data }: { data: any }) {
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: "1.5rem" }}>
+      <div style={{ borderBottom: "1px solid #e5e7eb", paddingBottom: "1rem" }}>
+        <h3
+          style={{
+            fontSize: "1.25rem",
+            fontWeight: 700,
+            color: "#111827",
+            marginBottom: "0.5rem",
+          }}
+        >
+          {data.title || "Untitled Finding"}
+        </h3>
+        <div style={{ display: "flex", gap: "8px" }}>
+          {data.severity && (
+            <span
+              style={{
+                background:
+                  data.severity === "HIGH" || data.severity === "CRITICAL"
+                    ? "#fee2e2"
+                    : "#fef3c7",
+                color:
+                  data.severity === "HIGH" || data.severity === "CRITICAL"
+                    ? "#991b1b"
+                    : "#92400e",
+                padding: "2px 8px",
+                borderRadius: "4px",
+                fontSize: "0.75rem",
+                fontWeight: 700,
+              }}
+            >
+              {data.severity}
+            </span>
+          )}
+          {data.confidence && (
+            <span
+              style={{
+                background: "#f3f4f6",
+                color: "#374151",
+                padding: "2px 8px",
+                borderRadius: "4px",
+                fontSize: "0.75rem",
+                fontWeight: 600,
+              }}
+            >
+              Confidence: {Math.round(data.confidence * 100)}%
+            </span>
+          )}
+        </div>
+      </div>
+
+      {data.description && (
+        <section>
+          <h4
+            style={{
+              fontSize: "0.9rem",
+              color: "#6b7280",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              marginBottom: "0.5rem",
+            }}
+          >
+            Description
+          </h4>
+          <p style={{ lineHeight: "1.6", color: "#374151" }}>
+            {data.description}
+          </p>
+        </section>
+      )}
+
+      {data.impact && (
+        <section>
+          <h4
+            style={{
+              fontSize: "0.9rem",
+              color: "#6b7280",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              marginBottom: "0.5rem",
+            }}
+          >
+            Impact
+          </h4>
+          <p style={{ lineHeight: "1.6", color: "#374151" }}>{data.impact}</p>
+        </section>
+      )}
+
+      {data.remediation && (
+        <section>
+          <h4
+            style={{
+              fontSize: "0.9rem",
+              color: "#6b7280",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              marginBottom: "0.5rem",
+            }}
+          >
+            Remediation
+          </h4>
+          <div
+            style={{
+              background: "#f8fafc",
+              padding: "1rem",
+              borderRadius: "6px",
+              fontFamily: "monospace",
+              fontSize: "0.9em",
+              overflowX: "auto",
+            }}
+          >
+            {data.remediation}
+          </div>
+        </section>
+      )}
+
+      {data.repro && (
+        <section>
+          <h4
+            style={{
+              fontSize: "0.9rem",
+              color: "#6b7280",
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+              marginBottom: "0.5rem",
+            }}
+          >
+            Reproduction Steps
+          </h4>
+          <p
+            style={{
+              lineHeight: "1.6",
+              color: "#374151",
+              whiteSpace: "pre-wrap",
+            }}
+          >
+            {data.repro}
+          </p>
+        </section>
+      )}
+
+      <section>
+        <h4
+          style={{
+            fontSize: "0.9rem",
+            color: "#6b7280",
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+            marginBottom: "0.5rem",
+          }}
+        >
+          Raw Data
+        </h4>
+        <details>
+          <summary
+            style={{ cursor: "pointer", color: "#4f46e5", fontSize: "0.9em" }}
+          >
+            View complete JSON payload
+          </summary>
+          <pre
+            style={{
+              marginTop: "1rem",
+              padding: "1rem",
+              background: "#f1f5f9",
+              borderRadius: "6px",
+              overflowX: "auto",
+              fontSize: "0.8em",
+            }}
+          >
+            {JSON.stringify(data, null, 2)}
+          </pre>
+        </details>
+      </section>
     </div>
   );
 }
@@ -715,18 +1148,18 @@ function CreateBounty() {
     abi: ERC20_ABI,
     functionName: "balanceOf",
     args: [address as `0x${string}`],
-    chainId: arcTestnet.id,
+    chainId: HOME_CHAIN.id,
   });
 
   const { isSuccess: approveConfirmed, isLoading: isApproving } =
     useWaitForTransactionReceipt({
       hash: approveTxHash,
-      chainId: arcTestnet.id,
+      chainId: HOME_CHAIN.id,
     });
   const { isSuccess: createConfirmed, isLoading: isCreating } =
     useWaitForTransactionReceipt({
       hash: createTxHash,
-      chainId: arcTestnet.id,
+      chainId: HOME_CHAIN.id,
     });
 
   // Watch for approval success to trigger creation
@@ -751,7 +1184,7 @@ function CreateBounty() {
           functionName: "createBounty",
           args: [target as `0x${string}`, deadline, amount],
           account: address as `0x${string}`,
-          chainId: arcTestnet.id,
+          chainId: HOME_CHAIN.id,
         },
         {
           onError: (err) => {
@@ -780,8 +1213,8 @@ function CreateBounty() {
 
   const handleSubmit = async () => {
     if (!address || !target || !rewardStr || !daysFromNow) return;
-    if (chainId !== arcTestnet.id) {
-      await switchChainAsync({ chainId: arcTestnet.id });
+    if (chainId !== HOME_CHAIN.id) {
+      await switchChainAsync({ chainId: HOME_CHAIN.id });
       return;
     }
     const amount = parseUnits(rewardStr, 6);
@@ -800,7 +1233,7 @@ function CreateBounty() {
       functionName: "approve",
       args: [CONTRACTS.REGISTRY, amount],
       account: address as `0x${string}`,
-      chainId: arcTestnet.id,
+      chainId: HOME_CHAIN.id,
     });
   };
 
@@ -811,7 +1244,7 @@ function CreateBounty() {
           Bounty Created!
         </h3>
         <p className="muted" style={{ marginBottom: "1rem" }}>
-          USDC has been locked in the registry contract on Arc.
+          USDC has been locked in the registry contract on {HOME_CHAIN.name}.
         </p>
         <button
           onClick={() => {
@@ -829,8 +1262,8 @@ function CreateBounty() {
   return (
     <div style={{ maxWidth: "500px" }}>
       <p className="muted" style={{ marginBottom: "1.5rem" }}>
-        Fund a bounty with USDC on Arc. Agents submit findings, you pick the
-        winner.
+        Fund a bounty with USDC on {HOME_CHAIN.name}. Agents submit findings,
+        you pick the winner.
       </p>
       <div style={{ marginBottom: "1rem" }}>
         <label
