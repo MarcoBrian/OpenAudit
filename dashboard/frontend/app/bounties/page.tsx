@@ -19,6 +19,7 @@ import {
   getSupportedPayoutChains,
   type BridgeStatus,
 } from "../web3/bridge";
+import Loader from "../components/Loader";
 
 // ── Types ──────────────────────────────────────────────────────────────────
 
@@ -200,7 +201,11 @@ function BountyList({ onSelect }: { onSelect: (b: Bounty) => void }) {
   }, [loadBounties]);
 
   if (loading) {
-    return <div className="muted text-center pt-10">Loading bounties...</div>;
+    return (
+      <div style={{ paddingTop: "4rem" }}>
+        <Loader size="large" text="Fetching active bounties..." centered />
+      </div>
+    );
   }
 
   if (bounties.length === 0) {
@@ -557,7 +562,12 @@ function SubmissionItem({
     });
   };
 
-  if (!finding) return <div className="card muted">Loading finding...</div>;
+  if (!finding)
+    return (
+      <div className="card muted p-8">
+        <Loader size="small" text="Loading finding details..." centered />
+      </div>
+    );
 
   return (
     <div className="card">
@@ -609,7 +619,9 @@ function SubmissionItem({
           }}
         >
           {loadingReport ? (
-            <div className="muted">Fetching IPFS content...</div>
+            <div className="p-4">
+              <Loader size="small" text="Fetching IPFS content..." />
+            </div>
           ) : reportData ? (
             <pre style={{ margin: 0, fontSize: "0.85em", color: "#ccc" }}>
               {JSON.stringify(reportData, null, 2)}
@@ -709,15 +721,21 @@ function CreateBounty() {
       chainId: arcTestnet.id,
     });
 
+  // Watch for approval success to trigger creation
   useEffect(() => {
+    // Only trigger if we are in the 'approving' step and just got confirmed
     if (approveConfirmed && step === "approving") {
       console.log("Approval confirmed, moving to create step...");
       if (!address) return;
-      setStep("creating");
+      
       const amount = parseUnits(rewardStr, 6);
       const deadline = BigInt(
         Math.floor(Date.now() / 1000) + Number(daysFromNow) * 86400,
       );
+
+      // Advance step before calling write to prevent double-call
+      setStep("creating");
+      
       create({
         address: CONTRACTS.REGISTRY,
         abi: REGISTRY_ABI,
@@ -725,6 +743,12 @@ function CreateBounty() {
         args: [target as `0x${string}`, deadline, amount],
         account: address as `0x${string}`,
         chainId: arcTestnet.id,
+      }, {
+        onError: (err) => {
+          console.error("Failed to create bounty tx:", err);
+          // If the user rejects the signature, we should go back to form or show error
+          // setStep("form") is handled by the other useEffect checking createError
+        }
       });
     }
   }, [approveConfirmed, step, rewardStr, daysFromNow, target, create, address]);
@@ -854,11 +878,27 @@ function CreateBounty() {
         style={{ width: "100%" }}
       >
         {step === "approving" ? (
-          <>
-            {isApproving ? "Waiting for Receipt..." : "Confirming Approval..."}
-          </>
+          <div className="flex flex-col items-center">
+            <div className="mb-2">
+              <Loader size="small" />
+            </div>
+            <span>
+              {isApproving
+                ? "Waiting for Approval Receipt..."
+                : "Please confirm Approval in wallet..."}
+            </span>
+          </div>
         ) : step === "creating" ? (
-          <>{isCreating ? "Confirming Bounty..." : "Creating Bounty..."}</>
+          <div className="flex flex-col items-center">
+            <div className="mb-2">
+              <Loader size="small" />
+            </div>
+            <span>
+              {isCreating
+                ? "Waiting for Creation Receipt..."
+                : "Please confirm Bounty Creation in wallet..."}
+            </span>
+          </div>
         ) : (
           "Approve & Create Bounty"
         )}
