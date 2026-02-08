@@ -2,7 +2,6 @@ __pycache__/
 .venv/
 .env
 *.log
-*.json
 dist/
 build/
 reports/

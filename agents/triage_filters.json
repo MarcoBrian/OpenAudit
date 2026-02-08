@@ -1,0 +1,77 @@
+{
+  "min_severity": "LOW",
+  "min_confidence": 0.5,
+  "default": {
+    "allow": [],
+    "deny": []
+  },
+  "tools": {
+    "slither": {
+      "allow": [
+        "reentrancy",
+        "arbitrary-send",
+        "tx-origin",
+        "delegatecall",
+        "weak-prng",
+        "incorrect-equality",
+        "oracle",
+        "price-manipulation",
+        "access-control",
+        "uninitialized",
+        "selfdestruct",
+        "suicidal",
+        "proxy",
+        "upgrade",
+        "signature",
+        "replay",
+        "dos",
+        "denial-of-service",
+        "front-run",
+        "frontrun",
+        "mev"
+      ],
+      "deny": [
+        "solc-version",
+        "naming-convention",
+        "constable-states",
+        "state-variable-could-be-constant",
+        "dead-code",
+        "unused-return",
+        "pragma",
+        "immutable-states",
+        "redundant-statements"
+      ]
+    },
+    "aderyn": {
+      "allow": [
+        "tx-origin",
+        "reentrancy",
+        "access-control",
+        "authorization",
+        "arbitrary-send",
+        "delegatecall",
+        "selfdestruct",
+        "oracle",
+        "price-manipulation",
+        "uninitialized",
+        "proxy",
+        "upgrade",
+        "signature",
+        "replay",
+        "dos",
+        "denial-of-service",
+        "front-run",
+        "frontrun",
+        "mev"
+      ],
+      "deny": [
+        "empty-require-revert",
+        "modifier-used-only-once",
+        "state-variable-could-be-constant",
+        "public-function-not-used-internally",
+        "unused-function",
+        "unused-variable"
+      ]
+    }
+  }
+}
