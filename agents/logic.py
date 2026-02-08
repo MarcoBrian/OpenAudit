@@ -83,6 +83,10 @@ def logic_review(
             )
         # Lazy import to avoid import errors when ollama is not available
         from agents.ollama_client import call_ollama
-        return call_ollama(prompt=prompt, model=ollama_model)
+        return call_ollama(
+            prompt=prompt,
+            model=ollama_model,
+            base_url=os.getenv("OLLAMA_BASE_URL"),
+        )
     except (requests.RequestException, ValueError, ImportError, RuntimeError):
         return []

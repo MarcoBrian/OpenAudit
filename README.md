@@ -306,6 +306,14 @@ In chat mode, you can:
 - Ask questions about Solidity security
 - Request audits: `run_audit file=sample_contracts/CoinFlip.sol`
 - Get help with audit workflows
+- List bounties: `list_bounties limit=10`
+- Analyze a bounty: `analyze_bounty bounty_id=1`
+- Submit a bounty finding: `submit_bounty bounty_id=1 report_cid=QmReportCID`
+
+Notes for bounty tools:
+- `analyze_bounty` uses an Etherscan-compatible API by default. Set `ETHERSCAN_API_URL` and `ETHERSCAN_API_KEY`.
+- To use a local source map instead: `analyze_bounty bounty_id=1 source_map=./bounty_sources.json use_etherscan=false`
+- `submit_bounty` uses `OPENAUDIT_WALLET_PRIVATE_KEY` by default (agent POV).
 
 ### Wallet Commands
 Check AgentKit wallet configuration:

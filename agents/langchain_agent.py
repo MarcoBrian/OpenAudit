@@ -33,9 +33,12 @@ try:
             from langchain.agents import AgentExecutor
             _USE_NEW_API = False
     
-    from langchain_core.messages import HumanMessage, SystemMessage
+    from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, BaseMessage
     from langchain_core.prompts import ChatPromptTemplate
     from langchain_core.tools import BaseTool, tool
+    from langchain_core.language_models.chat_models import BaseChatModel
+    from langchain_core.callbacks import CallbackManagerForLLMRun
+    from langchain_core.outputs import ChatGeneration, ChatResult
     from langchain_openai import ChatOpenAI
     from langchain_community.chat_models import ChatOllama
     
@@ -59,11 +62,17 @@ except ImportError as exc:  # pragma: no cover - optional dependency
     _USE_NEW_API = False
     HumanMessage = None  # type: ignore[assignment]
     SystemMessage = None  # type: ignore[assignment]
+    AIMessage = None  # type: ignore[assignment]
+    BaseMessage = None  # type: ignore[assignment]
     ChatPromptTemplate = None  # type: ignore[assignment]
     BaseTool = None  # type: ignore[assignment]
     tool = None  # type: ignore[assignment]
     ChatOpenAI = None  # type: ignore[assignment]
     ChatOllama = None  # type: ignore[assignment]
+    BaseChatModel = None  # type: ignore[assignment]
+    CallbackManagerForLLMRun = None  # type: ignore[assignment]
+    ChatGeneration = None  # type: ignore[assignment]
+    ChatResult = None  # type: ignore[assignment]
     _LANGCHAIN_IMPORT_ERROR = exc
 
 if _is_agent_mode:
@@ -113,12 +122,20 @@ DEFAULT_AGENT_SYSTEM_PROMPT = (
     "1. run_audit - Analyze Solidity files and produce JSON submissions\n"
     "2. register_agent - Register this agent in the OpenAuditRegistry (USE THIS when asked to register)\n"
     "3. check_registration - Verify if an agent is registered\n"
-    "4. Wallet tools - Only use when explicitly requested\n\n"
+    "4. list_bounties - List on-chain bounties from OpenAuditRegistry\n"
+    "5. analyze_bounty - Fetch a bounty target contract and run an audit\n"
+    "6. pin_submission - Upload a submission JSON to IPFS via Pinata\n"
+    "7. submit_bounty - Submit a bounty finding (report CID) on-chain\n"
+    "8. Wallet tools - Only use when explicitly requested\n\n"
     "Examples:\n"
     "- User: 'Register this agent' → Use register_agent tool\n"
     "- User: 'Register me' → Use register_agent tool\n"
     "- User: 'Sign up the agent' → Use register_agent tool\n"
     "- User: 'Check if I'm registered' → Use check_registration tool\n"
+    "- User: 'List bounties' → Use list_bounties tool\n"
+    "- User: 'Analyze bounty 3' → Use analyze_bounty tool\n"
+    "- User: 'Upload submission to IPFS' → Use pin_submission tool\n"
+    "- User: 'Submit bounty 3 with CID Qm...' → Use submit_bounty tool\n"
     "- User: 'How do I submit a bounty?' → Explain that registration is required and offer to register now\n"
     "Keep responses concise and actionable. Always use tools when appropriate."
 )
@@ -127,7 +144,8 @@ DEFAULT_CHAT_SYSTEM_PROMPT = (
     "You are the OpenAudit agent. You are responsible for self-registering and "
     "self-checking your registration in the OpenAuditRegistry so you can submit bounties and earn rewards. "
     "You can run Solidity audits using Aderyn and Slither, triage findings, optionally perform an LLM "
-    "logic review, and produce a JSON submission. "
+    "logic review, and produce a JSON submission. You can also list, analyze, and submit bounties "
+    "via the OpenAuditRegistry. "
     "If the user asks about bounties, rewards, or submissions, state clearly that you (the agent) must be "
     "registered first and offer to register yourself. "
     "Be clear, concise, and actionable. When the user asks for an action, "
@@ -194,16 +212,55 @@ _AUDIT_CONTEXT_HINTS = ("contract", "solidity", "smart contract", ".sol")
 
 _REGISTER_CONTEXT_HINTS = ("agent", "registry", "openaudit", "tba", "ens")
 
+_BOUNTY_LIST_PHRASES = (
+    "list bounties",
+    "show bounties",
+    "list bounty",
+    "bounty list",
+    "bounties list",
+)
+
+_BOUNTY_ANALYZE_PHRASES = (
+    "analyze bounty",
+    "analyse bounty",
+    "audit bounty",
+    "review bounty",
+    "bounty analyze",
+    "bounty analysis",
+)
+
+_BOUNTY_SUBMIT_PHRASES = (
+    "submit bounty",
+    "submit finding",
+    "bounty submit",
+    "submit report",
+)
+
+_IPFS_UPLOAD_PHRASES = (
+    "upload to ipfs",
+    "pin to ipfs",
+    "pinata",
+    "pin submission",
+    "upload submission",
+    "upload report",
+)
+
 _INTENT_ROUTER_PROMPT = (
     "You are a routing classifier for the OpenAudit agent. Decide whether the user is asking to "
     "perform an action right now. Return strict JSON only, with keys: action, params, confidence.\n"
-    "Valid actions: run_audit, register_agent, check_registration, none.\n"
+    "Valid actions: run_audit, register_agent, check_registration, list_bounties, analyze_bounty, pin_submission, submit_bounty, none.\n"
     "Use action=none for explanations, questions, or if you are unsure.\n"
     "Only choose register_agent if the user explicitly asks to register now (self-register). "
     "Only choose check_registration if the user asks to check registration status. "
-    "Only choose run_audit if the user asks to run an audit now.\n"
+    "Only choose run_audit if the user asks to run an audit now. "
+    "Only choose list_bounties if the user wants to list bounties now. "
+    "Only choose analyze_bounty if the user asks to analyze a bounty now. "
+    "Only choose pin_submission if the user asks to upload a submission to IPFS now. "
+    "Only choose submit_bounty if the user asks to submit a bounty finding now.\n"
     "params should include: file for run_audit if present; agent_name/agent_id/tba_address for "
-    "check_registration if present; agent_name for register_agent if provided.\n"
+    "check_registration if present; agent_name for register_agent if provided; "
+    "limit for list_bounties if present; bounty_id for analyze_bounty; "
+    "submission_path for pin_submission if present; bounty_id and report_cid for submit_bounty.\n"
     "confidence must be a number between 0 and 1.\n"
     "Output JSON only. Example: {\"action\":\"check_registration\",\"params\":{\"agent_name\":\"agent-local-test\"},\"confidence\":0.78}"
 )
@@ -244,10 +301,18 @@ def _extract_json_payload(text: str) -> Dict[str, Any]:
 
 def _parse_key_value_args(text: str) -> Dict[str, str]:
     params: Dict[str, str] = {}
+    pattern = re.compile(r"(\\w+)\\s*(?:=|:)\\s*([^\\s,]+)")
+    for key, value in pattern.findall(text):
+        key = key.strip()
+        if key in params:
+            continue
+        params[key] = value.strip().strip("`\"',")
+    if params:
+        return params
     for token in text.split():
         if "=" in token:
             key, value = token.split("=", 1)
-            params[key.strip()] = value.strip().strip("`\"'")
+            params[key.strip()] = value.strip().strip("`\"',")
     return params
 
 
@@ -316,6 +381,35 @@ def _extract_register_agent_name(text: str) -> Optional[str]:
             candidate = match.group(1).strip().strip("`\"'")
             if candidate and candidate not in {"me", "i", "we", "us", "my", "our", "this", "that", "it", "yourself"}:
                 return candidate
+    return None
+
+
+def _extract_bounty_id(text: str) -> Optional[int]:
+    raw = text.strip()
+    if not raw:
+        return None
+    patterns = (
+        r"\bbounty\s*(?:id)?\s*[:#]?\s*(\d+)",
+        r"\b(?:id|bounty_id)\s*[:#]?\s*(\d+)",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, raw, flags=re.IGNORECASE)
+        if match:
+            try:
+                return int(match.group(1))
+            except (TypeError, ValueError):
+                return None
+    return None
+
+
+def _extract_report_cid(text: str) -> Optional[str]:
+    raw = text.strip()
+    if not raw:
+        return None
+    # Best-effort CID detection (supports common IPFS multibase prefixes)
+    match = re.search(r"\b(Qm[1-9A-HJ-NP-Za-km-z]{10,}|bafy[0-9a-z]{10,}|bafk[0-9a-z]{10,})\b", raw)
+    if match:
+        return match.group(1)
     return None
 
 
@@ -540,6 +634,14 @@ def _get_registry_address() -> Optional[str]:
     )
 
 
+def _get_bounty_registry_address() -> Optional[str]:
+    return (
+        _get_registry_address()
+        or os.getenv("BOUNTY_HIVE_ADDRESS")
+        or os.getenv("BOUNTY_HIVE")
+    )
+
+
 def _ensure_registry_contract(contract: Any, registry_checksum: str) -> Optional[str]:
     try:
         contract.functions.nextAgentId().call()
@@ -586,6 +688,10 @@ def _detect_action_intent(text: str) -> Optional[ActionIntent]:
     explicit_run = "run_audit" in cleaned
     explicit_register = "register_agent" in cleaned
     explicit_check = "check_registration" in cleaned
+    explicit_list = "list_bounties" in cleaned
+    explicit_analyze = "analyze_bounty" in cleaned or "analyse_bounty" in cleaned
+    explicit_submit = "submit_bounty" in cleaned
+    explicit_pin = "pin_submission" in cleaned
     has_file = ".sol" in cleaned or "file" in params
 
     register_word = re.search(r"\bregister\b", cleaned) is not None
@@ -634,6 +740,38 @@ def _detect_action_intent(text: str) -> Optional[ActionIntent]:
                 params["agent_name"] = candidate
         return {"action": "register_agent", "params": params}
 
+    if (
+        explicit_list
+        or _contains_any(cleaned, _BOUNTY_LIST_PHRASES)
+        or ("bounties" in cleaned and "list" in cleaned)
+    ):
+        if "limit" not in params:
+            match = re.search(r"\blimit\s*[:=]?\s*(\d+)", text, flags=re.IGNORECASE)
+            if match:
+                params["limit"] = match.group(1)
+        return {"action": "list_bounties", "params": params}
+
+    if explicit_pin or _contains_any(cleaned, _IPFS_UPLOAD_PHRASES):
+        return {"action": "pin_submission", "params": params}
+
+    if explicit_analyze or _contains_any(cleaned, _BOUNTY_ANALYZE_PHRASES):
+        if "bounty_id" not in params:
+            bounty_id = _extract_bounty_id(text)
+            if bounty_id is not None:
+                params["bounty_id"] = bounty_id
+        return {"action": "analyze_bounty", "params": params}
+
+    if explicit_submit or _contains_any(cleaned, _BOUNTY_SUBMIT_PHRASES):
+        if not params.get("bounty_id"):
+            bounty_id = _extract_bounty_id(text)
+            if bounty_id is not None:
+                params["bounty_id"] = bounty_id
+        if not params.get("report_cid"):
+            report_cid = _extract_report_cid(text)
+            if report_cid:
+                params["report_cid"] = report_cid
+        return {"action": "submit_bounty", "params": params}
+
     audit_context = _contains_any(cleaned, _AUDIT_CONTEXT_HINTS)
     audit_phrase = _contains_any(cleaned, _AUDIT_ACTION_PHRASES)
     audit_verb = re.search(r"\b(audit|scan|analyze|review)\b", cleaned) is not None
@@ -666,7 +804,15 @@ def _classify_intent_with_llm(text: str, llm: Any) -> Optional[ActionIntent]:
     action = payload.get("action")
     if action == "none" or action is None:
         return None
-    if action not in {"run_audit", "register_agent", "check_registration"}:
+    if action not in {
+        "run_audit",
+        "register_agent",
+        "check_registration",
+        "list_bounties",
+        "analyze_bounty",
+        "pin_submission",
+        "submit_bounty",
+    }:
         return None
 
     confidence = payload.get("confidence", 0)
@@ -692,6 +838,83 @@ def _require_langchain() -> None:
         ) from _LANGCHAIN_IMPORT_ERROR
 
 
+# Custom LangChain chat model wrapper for Ollama cloud API with authentication
+if BaseChatModel is not None:
+    class ChatOllamaCloud(BaseChatModel):  # type: ignore[misc]
+        """Custom LangChain chat model wrapper for Ollama cloud API with authentication."""
+        
+        model: str
+        api_key: str
+        temperature: float = 0.2
+        timeout: float = 30.0
+        
+        def __init__(self, model: str, api_key: str, temperature: float = 0.2, timeout: float = 30.0):
+            _require_langchain()
+            try:
+                import ollama
+            except ImportError:
+                raise AgentRuntimeError(
+                    "ollama Python package is required for cloud API access. "
+                    "Install it with: pip install ollama"
+                )
+            
+            # Pass required fields to super().__init__() for Pydantic validation
+            super().__init__(
+                model=model,
+                api_key=api_key,
+                temperature=temperature,
+                timeout=timeout,
+            )
+            # Initialize the Ollama client after Pydantic validation
+            self._client = ollama.Client(
+                host="https://ollama.com",
+                headers={"Authorization": f"Bearer {api_key}"}
+            )
+        
+        @property
+        def _llm_type(self) -> str:
+            return "ollama-cloud"
+        
+        def _generate(
+            self,
+            messages: List[BaseMessage],
+            stop: Optional[List[str]] = None,
+            run_manager: Optional[CallbackManagerForLLMRun] = None,
+            **kwargs: Any,
+        ) -> ChatResult:
+            # Convert LangChain messages to Ollama format
+            ollama_messages = []
+            for msg in messages:
+                if isinstance(msg, HumanMessage):
+                    ollama_messages.append({"role": "user", "content": msg.content})
+                elif isinstance(msg, AIMessage):
+                    ollama_messages.append({"role": "assistant", "content": msg.content})
+                elif isinstance(msg, SystemMessage):
+                    ollama_messages.append({"role": "system", "content": msg.content})
+                else:
+                    ollama_messages.append({"role": "user", "content": str(msg.content)})
+            
+            # Call Ollama cloud API
+            try:
+                response = self._client.chat(
+                    model=self.model,
+                    messages=ollama_messages,
+                    options={"temperature": self.temperature},
+                )
+                
+                content = response.get("message", {}).get("content", "")
+                ai_message = AIMessage(content=content)
+                generation = ChatGeneration(message=ai_message)
+                
+                return ChatResult(generations=[generation])
+            except Exception as exc:
+                raise AgentRuntimeError(
+                    f"Ollama cloud API call failed: {exc}"
+                ) from exc
+else:
+    ChatOllamaCloud = None  # type: ignore[assignment, misc]
+
+
 def _build_llm() -> Any:
     _require_langchain()
     openai_key = os.getenv("OPENAI_API_KEY")
@@ -708,21 +931,66 @@ def _build_llm() -> Any:
 
     ollama_model = os.getenv("OLLAMA_MODEL")
     if ollama_model:
+        ollama_api_key = os.getenv("OLLAMA_API_KEY")
         base_url = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-        # ChatOllama might try to connect - this could be slow if Ollama isn't running
-        # Add timeout to fail faster
-        try:
-            return ChatOllama(
-                model=ollama_model, 
-                base_url=base_url, 
-                temperature=0.2,
-                timeout=5.0,  # 5 second timeout for initialization
-            )
-        except Exception as exc:
-            raise AgentRuntimeError(
-                f"Failed to connect to Ollama at {base_url}. "
-                f"Is Ollama running? Error: {exc}"
-            ) from exc
+        
+        # Detect cloud mode: if OLLAMA_API_KEY is set, use Ollama cloud API directly
+        # Or if model name contains "-cloud", prefer cloud mode if API key is available
+        # Or if base_url is explicitly set to https://ollama.com
+        is_cloud_model = "-cloud" in ollama_model.lower()
+        use_cloud_api = ollama_api_key and (is_cloud_model or base_url == "https://ollama.com")
+        
+        # Debug logging
+        if _is_agent_mode:
+            print(f"  - Ollama configuration:", flush=True)
+            print(f"    Model: {ollama_model}", flush=True)
+            print(f"    Base URL: {base_url}", flush=True)
+            print(f"    API Key: {'***set***' if ollama_api_key else 'not set'}", flush=True)
+            print(f"    Cloud model detected: {is_cloud_model}", flush=True)
+            print(f"    Mode: {'CLOUD' if use_cloud_api else 'LOCAL'}", flush=True)
+        
+        if use_cloud_api:
+            # Use Ollama cloud API directly with API key authentication
+            # According to https://docs.ollama.com/cloud, we use the Ollama Python client
+            # with host="https://ollama.com" and Authorization header
+            if _is_agent_mode:
+                print(f"    Using Ollama Cloud API at https://ollama.com", flush=True)
+            if ChatOllamaCloud is None:
+                raise AgentRuntimeError(
+                    "ChatOllamaCloud is not available. "
+                    "Make sure LangChain dependencies are installed: pip install langchain langchain-openai langchain-community"
+                )
+            try:
+                return ChatOllamaCloud(
+                    model=ollama_model,
+                    api_key=ollama_api_key,
+                    temperature=0.2,
+                    timeout=30.0,
+                )
+            except Exception as exc:
+                raise AgentRuntimeError(
+                    f"Failed to initialize Ollama cloud API client. "
+                    f"Make sure OLLAMA_API_KEY is set correctly and 'ollama' package is installed. "
+                    f"Error: {exc}"
+                ) from exc
+        else:
+            # Local Ollama mode (default)
+            # ChatOllama might try to connect - this could be slow if Ollama isn't running
+            # Add timeout to fail faster
+            if _is_agent_mode:
+                print(f"    Using Local Ollama at {base_url}", flush=True)
+            try:
+                return ChatOllama(
+                    model=ollama_model, 
+                    base_url=base_url, 
+                    temperature=0.2,
+                    timeout=5.0,  # 5 second timeout for initialization
+                )
+            except Exception as exc:
+                raise AgentRuntimeError(
+                    f"Failed to connect to Ollama at {base_url}. "
+                    f"Is Ollama running? Error: {exc}"
+                ) from exc
 
     raise AgentRuntimeError(
         "No LLM configured. Set OPENAI_API_KEY or OLLAMA_MODEL to run the LangChain agent."
@@ -866,6 +1134,14 @@ def _run_audit_impl(
         progress=ProgressReporter(Path(reports_dir)) if dump_intermediate else None,
     )
     return json.dumps(submission, indent=2)
+
+
+def _write_submission_file(submission: dict, submission_path: str) -> str:
+    path = Path(submission_path).expanduser()
+    if path.parent and not path.parent.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(submission, indent=2), encoding="utf-8")
+    return str(path)
 
 
 if tool is None:
@@ -1403,231 +1679,399 @@ else:
         )
 
 
-# ---------------------------------------------------------------------------
-# set_payout_chain / get_payout_chain tools
-# ---------------------------------------------------------------------------
-
-SUPPORTED_PAYOUT_CHAINS = {"arc", "base", "ethereum", "arbitrum", "polygon", "optimism"}
-
-
-def _set_payout_chain_impl(
-    payout_chain: str,
-    agent_name: Optional[str] = None,
-    agent_id: Optional[int] = None,
+def _list_bounties_impl(
+    limit: int = 20,
+    rpc_url: Optional[str] = None,
+    registry_address: Optional[str] = None,
 ) -> str:
-    """Update the preferred USDC payout chain for a registered agent."""
-    if Web3 is None:
-        raise AgentRuntimeError("web3.py is not installed.") from _WEB3_IMPORT_ERROR  # type: ignore[arg-type]
+    """
+    List bounties from the OpenAuditRegistry.
+
+    Parameters (all optional):
+    - limit: Maximum number of bounties to return (default: 20)
+    - rpc_url: RPC URL override (default: OPENAUDIT_WALLET_RPC_URL or RPC_URL)
+    - registry_address: Registry address override (default: OPENAUDIT_REGISTRY_ADDRESS or BOUNTY_HIVE)
+    """
+    if isinstance(limit, dict):  # type: ignore[redundant-expr]
+        payload = limit  # type: ignore[assignment]
+        limit = payload.get("limit", limit)
+        rpc_url = payload.get("rpc_url") or rpc_url
+        registry_address = payload.get("registry_address") or payload.get("registry") or registry_address
 
     _load_env()
 
-    if isinstance(payout_chain, dict):  # type: ignore[redundant-expr]
-        payload = payout_chain  # type: ignore[assignment]
-        payout_chain = payload.get("payout_chain", "")
-        agent_name = payload.get("agent_name")
-        agent_id = payload.get("agent_id")
+    limit_int = _coerce_int(limit, 20)
+    rpc_url = rpc_url or _get_rpc_url()
+    if not rpc_url:
+        return "error: missing OPENAUDIT_WALLET_RPC_URL (or RPC_URL). Set this in your .env."
 
-    if not payout_chain:
-        return "error: payout_chain is required (e.g., 'base', 'ethereum', 'arbitrum', 'arc')."
-
-    payout_chain = payout_chain.strip().lower()
-    if payout_chain not in SUPPORTED_PAYOUT_CHAINS:
+    registry_address = registry_address or _get_bounty_registry_address()
+    if not registry_address:
         return (
-            f"error: unsupported payout_chain '{payout_chain}'. "
-            f"Supported: {', '.join(sorted(SUPPORTED_PAYOUT_CHAINS))}"
+            "error: missing registry address. "
+            "Set OPENAUDIT_REGISTRY_ADDRESS (or BOUNTY_HIVE)."
         )
 
-    private_key = os.getenv("OPENAUDIT_WALLET_PRIVATE_KEY")
-    rpc_url = _get_rpc_url()
-    if not private_key or not rpc_url:
-        return "error: missing OPENAUDIT_WALLET_PRIVATE_KEY or RPC URL."
-
-    w3 = Web3(Web3.HTTPProvider(rpc_url))
-    if not w3.is_connected():
-        return f"error: could not connect to RPC at {rpc_url}"
-
-    account = w3.eth.account.from_key(private_key)
-
-    registry_address = _get_registry_address()
-    if not registry_address:
-        return "error: missing OPENAUDIT_REGISTRY_ADDRESS."
-
     try:
-        registry_checksum = w3.to_checksum_address(registry_address)
-    except ValueError:
-        return f"error: invalid OPENAUDIT_REGISTRY_ADDRESS: {registry_address}"
+        from agents.bounty_discovery import RegistryClient
 
-    contract = w3.eth.contract(address=registry_checksum, abi=REGISTRY_ABI)
-
-    # Resolve agent_id from agent_name or wallet
-    resolved_id: Optional[int] = None
-    if agent_id is not None:
-        resolved_id = int(agent_id)
-    elif agent_name:
-        try:
-            resolved_id = int(contract.functions.nameToAgentId(agent_name).call())
-        except Exception:
-            return f"error: could not resolve agent_name '{agent_name}'."
-    else:
-        try:
-            resolved_id = int(contract.functions.ownerToAgentId(account.address).call())
-        except Exception:
-            pass
-
-    if not resolved_id or resolved_id == 0:
-        return "error: could not determine agent_id. Provide agent_name or agent_id."
-
-    try:
-        nonce = w3.eth.get_transaction_count(account.address)
-        tx = contract.functions.setPayoutChain(
-            resolved_id,
-            payout_chain,
-        ).build_transaction({
-            "from": account.address,
-            "nonce": nonce,
-            "gas": 200_000,
-            "gasPrice": w3.eth.gas_price,
-        })
-        signed = account.sign_transaction(tx)
-        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-        receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
-
-        if receipt.status != 1:
-            return json.dumps({"status": "failed", "tx_hash": tx_hash.hex()})
-
-        return json.dumps({
-            "status": "success",
-            "tx_hash": tx_hash.hex(),
-            "agent_id": resolved_id,
-            "payout_chain": payout_chain,
-        })
-    except ContractLogicError as exc:  # type: ignore[misc]
-        return f"error: contract reverted during setPayoutChain: {exc}"
+        client = RegistryClient(rpc_url, registry_address)
+        total = client.total_bounties()
+        limit_int = max(0, limit_int)
+        limit_int = min(total, limit_int) if total > 0 else 0
+        payload = []
+        for bounty_id in range(1, limit_int + 1):
+            bounty = client.get_bounty(bounty_id)
+            payload.append(bounty.__dict__)
+        return json.dumps(
+            {"total": total, "limit": limit_int, "bounties": payload}, indent=2
+        )
     except Exception as exc:
-        return f"error: failed to set payout chain: {exc}"
+        return f"error: failed to list bounties: {exc}"
 
 
-def _get_payout_chain_impl(
-    agent_name: Optional[str] = None,
-    agent_id: Optional[int] = None,
+def _analyze_bounty_impl(
+    bounty_id: int,
+    tools: str = "aderyn,slither",
+    max_issues: int = 2,
+    use_llm: bool = True,
+    dump_intermediate: bool = True,
+    reports_dir: str = "reports",
+    submission_path: str = "submission.json",
+    rpc_url: Optional[str] = None,
+    registry_address: Optional[str] = None,
+    use_etherscan: bool = True,
+    source_map: Optional[str] = None,
 ) -> str:
-    """Read the preferred USDC payout chain for a registered agent."""
-    if Web3 is None:
-        raise AgentRuntimeError("web3.py is not installed.") from _WEB3_IMPORT_ERROR  # type: ignore[arg-type]
+    """
+    Fetch a bounty target contract and run the audit pipeline.
+
+    Parameters:
+    - bounty_id: Bounty ID to analyze (required)
+    - tools, max_issues, use_llm, dump_intermediate, reports_dir: same as run_audit
+    - submission_path: Where to write the final submission JSON (default: submission.json)
+    - rpc_url: RPC URL override
+    - registry_address: Registry address override
+    - use_etherscan: Fetch source via Etherscan-compatible API (default: True)
+    - source_map: Path to JSON mapping of target address -> Solidity file path
+    """
+    if isinstance(bounty_id, dict):  # type: ignore[redundant-expr]
+        payload = bounty_id  # type: ignore[assignment]
+        bounty_id = payload.get("bounty_id", bounty_id)
+        tools = payload.get("tools", tools)
+        max_issues = payload.get("max_issues", max_issues)
+        use_llm = payload.get("use_llm", use_llm)
+        dump_intermediate = payload.get("dump_intermediate", dump_intermediate)
+        reports_dir = payload.get("reports_dir", reports_dir)
+        submission_path = payload.get("submission_path", submission_path)
+        rpc_url = payload.get("rpc_url") or rpc_url
+        registry_address = payload.get("registry_address") or payload.get("registry") or registry_address
+        use_etherscan = payload.get("use_etherscan", use_etherscan)
+        source_map = payload.get("source_map") or source_map
+
+    if isinstance(bounty_id, str):
+        match = re.search(r"(\\d+)", bounty_id)
+        bounty_id = match.group(1) if match else bounty_id
+    try:
+        bounty_id_int = int(bounty_id)
+    except (TypeError, ValueError):
+        return f"error: invalid bounty_id: {bounty_id}"
 
     _load_env()
 
-    if isinstance(agent_name, dict):  # type: ignore[redundant-expr]
-        payload = agent_name  # type: ignore[assignment]
-        agent_name = payload.get("agent_name")
-        agent_id = payload.get("agent_id")
-
-    rpc_url = _get_rpc_url()
+    rpc_url = rpc_url or _get_rpc_url()
     if not rpc_url:
-        return "error: missing RPC URL."
+        return "error: missing OPENAUDIT_WALLET_RPC_URL (or RPC_URL). Set this in your .env."
 
-    w3 = Web3(Web3.HTTPProvider(rpc_url))
-    if not w3.is_connected():
-        return f"error: could not connect to RPC at {rpc_url}"
-
-    registry_address = _get_registry_address()
+    registry_address = registry_address or _get_bounty_registry_address()
     if not registry_address:
-        return "error: missing OPENAUDIT_REGISTRY_ADDRESS."
+        return (
+            "error: missing registry address. "
+            "Set OPENAUDIT_REGISTRY_ADDRESS (or BOUNTY_HIVE)."
+        )
+
+    max_issues = _coerce_int(max_issues, 2)
+    use_llm = _coerce_bool(use_llm, True)
+    dump_intermediate = _coerce_bool(dump_intermediate, True)
+    reports_dir = str(reports_dir or "reports")
 
     try:
-        registry_checksum = w3.to_checksum_address(registry_address)
-    except ValueError:
-        return f"error: invalid OPENAUDIT_REGISTRY_ADDRESS: {registry_address}"
+        from agents.bounty_discovery import (
+            RegistryClient,
+            load_source_from_etherscan,
+            load_source_from_map,
+        )
 
-    contract = w3.eth.contract(address=registry_checksum, abi=REGISTRY_ABI)
+        client = RegistryClient(rpc_url, registry_address)
+        bounty = client.get_bounty(bounty_id_int)
 
-    resolved_id: Optional[int] = None
-    if agent_id is not None:
-        resolved_id = int(agent_id)
-    elif agent_name:
-        try:
-            resolved_id = int(contract.functions.nameToAgentId(agent_name).call())
-        except Exception:
-            return f"error: could not resolve agent_name '{agent_name}'."
-    else:
-        private_key = os.getenv("OPENAUDIT_WALLET_PRIVATE_KEY")
-        if private_key:
-            account = w3.eth.account.from_key(private_key)
-            try:
-                resolved_id = int(contract.functions.ownerToAgentId(account.address).call())
-            except Exception:
-                pass
+        if source_map:
+            solidity_file = load_source_from_map(bounty.target_contract, Path(source_map))
+            source_method = "source_map"
+        elif _coerce_bool(use_etherscan, True):
+            solidity_file = load_source_from_etherscan(bounty.target_contract)
+            source_method = "etherscan"
+        else:
+            return (
+                "error: no source loader configured. "
+                "Provide source_map or set use_etherscan=true."
+            )
 
-    if not resolved_id or resolved_id == 0:
-        return "error: could not determine agent_id. Provide agent_name or agent_id."
+        submission = _run_pipeline(
+            solidity_file=solidity_file,
+            tools=_parse_tools(tools),
+            max_issues=max_issues,
+            use_llm=use_llm,
+            dump_intermediate=dump_intermediate,
+            reports_dir=Path(reports_dir),
+            progress=ProgressReporter(Path(reports_dir)) if dump_intermediate else None,
+        )
+        submission_file = _write_submission_file(submission, submission_path)
 
-    try:
-        chain = contract.functions.getPayoutChain(resolved_id).call()
-        return json.dumps({
-            "status": "success",
-            "agent_id": resolved_id,
-            "payout_chain": chain or "",
-        })
+        return json.dumps(
+            {
+                "bounty": bounty.__dict__,
+                "source_method": source_method,
+                "source_file": str(solidity_file),
+                "submission_path": submission_file,
+                "submission": submission,
+            },
+            indent=2,
+        )
     except Exception as exc:
-        return f"error: failed to get payout chain: {exc}"
+        return f"error: failed to analyze bounty: {exc}"
+
+
+def _submit_bounty_impl(
+    bounty_id: int,
+    report_cid: str,
+    rpc_url: Optional[str] = None,
+    registry_address: Optional[str] = None,
+    private_key: Optional[str] = None,
+) -> str:
+    """
+    Submit a bounty finding on-chain.
+
+    Parameters:
+    - bounty_id: Bounty ID to submit against (required)
+    - report_cid: IPFS CID of the report (required)
+    - rpc_url: RPC URL override (default: OPENAUDIT_WALLET_RPC_URL or RPC_URL)
+    - registry_address: Registry address override (default: OPENAUDIT_REGISTRY_ADDRESS or BOUNTY_HIVE)
+    - private_key: Submitter private key (default: OPENAUDIT_WALLET_PRIVATE_KEY)
+    """
+    if Web3 is None:
+        raise AgentRuntimeError(
+            "web3.py is not installed. Install it with: pip install web3"
+        ) from _WEB3_IMPORT_ERROR  # type: ignore[arg-type]
+
+    if isinstance(bounty_id, dict):  # type: ignore[redundant-expr]
+        payload = bounty_id  # type: ignore[assignment]
+        bounty_id = payload.get("bounty_id", bounty_id)
+        report_cid = payload.get("report_cid", report_cid)
+        rpc_url = payload.get("rpc_url") or rpc_url
+        registry_address = payload.get("registry_address") or payload.get("registry") or registry_address
+        private_key = payload.get("private_key") or private_key
+
+    try:
+        bounty_id_int = int(bounty_id)
+    except (TypeError, ValueError):
+        return f"error: invalid bounty_id: {bounty_id}"
+
+    if not report_cid:
+        return "error: report_cid is required to submit a finding."
+
+    _load_env()
+
+    private_key = private_key or os.getenv("OPENAUDIT_WALLET_PRIVATE_KEY")
+    if not private_key:
+        return (
+            "error: missing OPENAUDIT_WALLET_PRIVATE_KEY. "
+            "Set this in your .env to enable submissions."
+        )
+
+    rpc_url = rpc_url or _get_rpc_url()
+    if not rpc_url:
+        return "error: missing OPENAUDIT_WALLET_RPC_URL (or RPC_URL). Set this in your .env."
+
+    registry_address = registry_address or _get_bounty_registry_address()
+    if not registry_address:
+        return (
+            "error: missing registry address. "
+            "Set OPENAUDIT_REGISTRY_ADDRESS (or BOUNTY_HIVE)."
+        )
+
+    try:
+        from agents.bounty_submission import BountySubmissionClient
+
+        submitter_client = BountySubmissionClient(rpc_url, registry_address)
+        account = submitter_client.web3.eth.account.from_key(private_key)
+        tx_hash = submitter_client.submit_finding(
+            private_key=private_key,
+            bounty_id=bounty_id_int,
+            report_cid=report_cid,
+        )
+        return json.dumps(
+            {
+                "status": "submitted",
+                "bounty_id": bounty_id_int,
+                "report_cid": report_cid,
+                "submitter": account.address,
+                "tx_hash": tx_hash,
+                "registry": registry_address,
+            },
+            indent=2,
+        )
+    except Exception as exc:
+        return f"error: failed to submit bounty: {exc}"
+
+
+def _pin_submission_impl(
+    submission_path: str = "submission.json",
+    name: Optional[str] = None,
+) -> str:
+    """
+    Upload a submission JSON file to IPFS via Pinata.
+
+    Parameters:
+    - submission_path: Path to a JSON file (default: submission.json)
+    - name: Optional Pinata display name (default: derived from file name)
+    """
+    if isinstance(submission_path, dict):  # type: ignore[redundant-expr]
+        payload = submission_path  # type: ignore[assignment]
+        submission_path = payload.get("submission_path", submission_path)
+        name = payload.get("name") or name
+
+    path = Path(str(submission_path)).expanduser()
+    if not path.exists():
+        return f"error: submission file not found: {path}"
+
+    try:
+        report_json = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        return f"error: submission file is not valid JSON: {exc}"
+
+    try:
+        from dashboard.server.pinata import PinataError, gateway_url, pin_json
+
+        pin_name = name or path.stem
+        cid = pin_json(report_json, name=pin_name)
+        gw_url = gateway_url(cid)
+        return json.dumps(
+            {
+                "status": "pinned",
+                "cid": cid,
+                "gateway_url": gw_url,
+                "submission_path": str(path),
+            },
+            indent=2,
+        )
+    except PinataError as exc:
+        return f"error: failed to pin to IPFS: {exc}"
+    except Exception as exc:
+        return f"error: failed to pin to IPFS: {exc}"
 
 
 if tool is None:
-    def set_payout_chain() -> str:  # type: ignore[override]
-        raise AgentRuntimeError("LangChain tools are unavailable.")
-    def get_payout_chain() -> str:  # type: ignore[override]
+    def list_bounties() -> str:  # type: ignore[override]
         raise AgentRuntimeError("LangChain tools are unavailable.")
 else:
-    @tool("set_payout_chain")
-    def set_payout_chain(
-        payout_chain: str = "",
-        agent_name: Optional[str] = None,
-        agent_id: Optional[int] = None,
+    @tool("list_bounties")
+    def list_bounties(
+        limit: int = 20,
+        rpc_url: Optional[str] = None,
+        registry_address: Optional[str] = None,
     ) -> str:
-        """
-        Update the preferred USDC payout chain for this agent.
-
-        When a bounty is resolved, USDC is bridged from Arc to the winner's preferred chain.
-        Use this tool to set or change the chain where you want to receive USDC payouts.
-
-        Parameters:
-        - payout_chain (required): Target chain name, e.g., "base", "ethereum", "arbitrum", "arc", "polygon", "optimism"
-        - agent_name: Agent name (optional, defaults to this agent's wallet)
-        - agent_id: Agent ID (optional)
-
-        Returns JSON with status and transaction hash.
-        """
-        return _set_payout_chain_impl(
-            payout_chain=payout_chain,
-            agent_name=agent_name,
-            agent_id=agent_id,
+        """List bounties from the OpenAuditRegistry."""
+        return _list_bounties_impl(
+            limit=limit,
+            rpc_url=rpc_url,
+            registry_address=registry_address,
         )
 
-    @tool("get_payout_chain")
-    def get_payout_chain(
-        agent_name: Optional[str] = None,
-        agent_id: Optional[int] = None,
+
+if tool is None:
+    def analyze_bounty() -> str:  # type: ignore[override]
+        raise AgentRuntimeError("LangChain tools are unavailable.")
+else:
+    @tool("analyze_bounty")
+    def analyze_bounty(
+        bounty_id: int,
+        tools: str = "aderyn,slither",
+        max_issues: int = 2,
+        use_llm: bool = True,
+        dump_intermediate: bool = True,
+        reports_dir: str = "reports",
+        submission_path: str = "submission.json",
+        rpc_url: Optional[str] = None,
+        registry_address: Optional[str] = None,
+        use_etherscan: bool = True,
+        source_map: Optional[str] = None,
     ) -> str:
-        """
-        Get the preferred USDC payout chain for an agent.
+        """Analyze a bounty target contract and return submission JSON."""
+        return _analyze_bounty_impl(
+            bounty_id=bounty_id,
+            tools=tools,
+            max_issues=max_issues,
+            use_llm=use_llm,
+            dump_intermediate=dump_intermediate,
+            reports_dir=reports_dir,
+            submission_path=submission_path,
+            rpc_url=rpc_url,
+            registry_address=registry_address,
+            use_etherscan=use_etherscan,
+            source_map=source_map,
+        )
 
-        Parameters:
-        - agent_name: Agent name to look up
-        - agent_id: Agent ID to look up
 
-        If neither is provided, looks up this agent by wallet address.
+if tool is None:
+    def submit_bounty() -> str:  # type: ignore[override]
+        raise AgentRuntimeError("LangChain tools are unavailable.")
+else:
+    @tool("submit_bounty")
+    def submit_bounty(
+        bounty_id: int,
+        report_cid: str,
+        rpc_url: Optional[str] = None,
+        registry_address: Optional[str] = None,
+        private_key: Optional[str] = None,
+    ) -> str:
+        """Submit a bounty finding on-chain."""
+        return _submit_bounty_impl(
+            bounty_id=bounty_id,
+            report_cid=report_cid,
+            rpc_url=rpc_url,
+            registry_address=registry_address,
+            private_key=private_key,
+        )
 
-        Returns JSON with the agent's preferred payout chain.
-        """
-        return _get_payout_chain_impl(
-            agent_name=agent_name,
-            agent_id=agent_id,
+
+if tool is None:
+    def pin_submission() -> str:  # type: ignore[override]
+        raise AgentRuntimeError("LangChain tools are unavailable.")
+else:
+    @tool("pin_submission")
+    def pin_submission(
+        submission_path: str = "submission.json",
+        name: Optional[str] = None,
+    ) -> str:
+        """Upload a submission JSON file to IPFS via Pinata."""
+        return _pin_submission_impl(
+            submission_path=submission_path,
+            name=name,
         )
 
 
 def _build_tools(include_wallet_tools: bool) -> List[BaseTool]:
     _require_langchain()
-    tools: List[BaseTool] = [run_audit, register_agent, check_registration, set_payout_chain, get_payout_chain]
+    tools: List[BaseTool] = [
+        run_audit,
+        register_agent,
+        check_registration,
+        list_bounties,
+        analyze_bounty,
+        pin_submission,
+        submit_bounty,
+    ]
 
     if not include_wallet_tools:
         return tools
@@ -1668,6 +2112,11 @@ def _build_prompt(system_prompt: str | None = None) -> ChatPromptTemplate:
         "- set_payout_chain: JSON with payout_chain (required), optional agent_name or agent_id\n"
         "- get_payout_chain: JSON with optional agent_name or agent_id\n"
         "- run_audit: JSON with file (required), tools, max_issues, use_llm, dump_intermediate, reports_dir\n\n"
+        "- list_bounties: JSON with optional limit, rpc_url, registry_address\n"
+        "- analyze_bounty: JSON with bounty_id (required), tools, max_issues, use_llm, dump_intermediate, "
+        "reports_dir, submission_path, rpc_url, registry_address, use_etherscan, source_map\n"
+        "- pin_submission: JSON with optional submission_path, name\n"
+        "- submit_bounty: JSON with bounty_id (required), report_cid (required), rpc_url, registry_address\n\n"
         "Use the following format:\n"
         "Thought: your reasoning\n"
         "Action: the tool name to use\n"
@@ -1759,6 +2208,14 @@ def create_agent_executor(
                 "LangChain agent creation functions are unavailable. "
                 "Install compatible LangChain version."
             )
+        max_iterations = _coerce_int(
+            os.getenv("OPENAUDIT_AGENT_MAX_ITERATIONS"),
+            10,
+        )
+        max_execution_time = _coerce_int(
+            os.getenv("OPENAUDIT_AGENT_MAX_EXECUTION_TIME"),
+            120,
+        )
         prompt = _build_prompt(system_prompt)
         agent = create_react_agent(llm, tools, prompt)
         executor = AgentExecutor(
@@ -1766,8 +2223,8 @@ def create_agent_executor(
             tools=tools,
             verbose=verbose,
             handle_parsing_errors=True,
-            max_iterations=10,  # Increased to allow tool calls
-            max_execution_time=120,  # Increased timeout
+            max_iterations=max_iterations,
+            max_execution_time=max_execution_time,
             early_stopping_method="force",
             return_intermediate_steps=True,  # Return intermediate steps for debugging
         )
@@ -1876,24 +2333,90 @@ def run_chat_mode(agent_executor: Any, system_prompt: str | None = None) -> int:
                     print(output)
                     continue
 
-                if action == "set_payout_chain":
-                    allowed = {"payout_chain", "agent_name", "agent_id"}
+                if action == "list_bounties":
+                    allowed = {"limit", "rpc_url", "registry_address", "registry"}
                     params = {key: value for key, value in params.items() if key in allowed}
                     try:
-                        output = _set_payout_chain_impl(**params)
+                        output = _list_bounties_impl(**params)
                     except Exception as exc:
-                        print(f"error: failed to set payout chain ({exc})")
+                        print(f"error: failed to list bounties ({exc})")
                         continue
                     print(output)
                     continue
 
-                if action == "get_payout_chain":
-                    allowed = {"agent_name", "agent_id"}
+                if action == "analyze_bounty":
+                    allowed = {
+                        "bounty_id",
+                        "tools",
+                        "max_issues",
+                        "use_llm",
+                        "dump_intermediate",
+                        "reports_dir",
+                        "submission_path",
+                        "rpc_url",
+                        "registry_address",
+                        "registry",
+                        "use_etherscan",
+                        "source_map",
+                    }
                     params = {key: value for key, value in params.items() if key in allowed}
+                    if "bounty_id" not in params:
+                        bounty_id = _extract_bounty_id(user_input)
+                        if bounty_id is not None:
+                            params["bounty_id"] = bounty_id
+                    if "bounty_id" not in params:
+                        print("Please provide a bounty ID, e.g. `analyze_bounty bounty_id=3`.")
+                        continue
                     try:
-                        output = _get_payout_chain_impl(**params)
+                        output = _analyze_bounty_impl(**params)
                     except Exception as exc:
-                        print(f"error: failed to get payout chain ({exc})")
+                        print(f"error: failed to analyze bounty ({exc})")
+                        continue
+                    print(output)
+                    continue
+
+                if action == "submit_bounty":
+                    allowed = {
+                        "bounty_id",
+                        "report_cid",
+                        "rpc_url",
+                        "registry_address",
+                        "registry",
+                        "private_key",
+                    }
+                    params = {key: value for key, value in params.items() if key in allowed}
+                    if isinstance(params.get("bounty_id"), str):
+                        params["bounty_id"] = params["bounty_id"].strip().strip("`\"',")
+                    if not params.get("bounty_id"):
+                        bounty_id = _extract_bounty_id(user_input)
+                        if bounty_id is not None:
+                            params["bounty_id"] = bounty_id
+                    if isinstance(params.get("report_cid"), str):
+                        params["report_cid"] = params["report_cid"].strip().strip("`\"',")
+                    if not params.get("report_cid"):
+                        report_cid = _extract_report_cid(user_input)
+                        if report_cid:
+                            params["report_cid"] = report_cid
+                    if "bounty_id" not in params or "report_cid" not in params:
+                        print("Please provide bounty_id and report_cid, e.g. `submit_bounty bounty_id=3 report_cid=Qm...`.")
+                        continue
+                    try:
+                        output = _submit_bounty_impl(**params)
+                    except Exception as exc:
+                        print(f"error: failed to submit bounty ({exc})")
+                        continue
+                    print(output)
+                    continue
+
+                if action == "pin_submission":
+                    allowed = {"submission_path", "name"}
+                    params = {key: value for key, value in params.items() if key in allowed}
+                    if "submission_path" not in params:
+                        params["submission_path"] = "submission.json"
+                    try:
+                        output = _pin_submission_impl(**params)
+                    except Exception as exc:
+                        print(f"error: failed to pin submission ({exc})")
                         continue
                     print(output)
                     continue
