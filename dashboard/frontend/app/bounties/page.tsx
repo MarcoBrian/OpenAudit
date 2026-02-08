@@ -9,6 +9,7 @@ import {
   useWriteContract,
   useWaitForTransactionReceipt,
   usePublicClient,
+  useSwitchChain,
 } from "wagmi";
 import { formatUnits, parseUnits } from "viem";
 import { CONTRACTS, CHAIN_LABELS, arcTestnet } from "../web3/config";
@@ -135,7 +136,7 @@ function ConnectPrompt({ action }: { action: string }) {
 function BountyList() {
   const [bounties, setBounties] = useState<Bounty[]>([]);
   const [loading, setLoading] = useState(true);
-  const client = usePublicClient();
+  const client = usePublicClient({ chainId: arcTestnet.id });
 
   const { data: nextBountyId } = useReadContract({
     address: CONTRACTS.REGISTRY,
@@ -293,7 +294,8 @@ function BountyList() {
 // ── Create Bounty ──────────────────────────────────────────────────────────
 
 function CreateBounty() {
-  const { address } = useAccount();
+  const { address, chainId } = useAccount();
+  const { switchChainAsync } = useSwitchChain();
   const [target, setTarget] = useState("");
   const [rewardStr, setRewardStr] = useState("");
   const [daysFromNow, setDaysFromNow] = useState("7");
@@ -336,8 +338,12 @@ function CreateBounty() {
     }
   }, [createConfirmed, step]);
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!address || !target || !rewardStr || !daysFromNow) return;
+    if (chainId !== arcTestnet.id) {
+      await switchChainAsync({ chainId: arcTestnet.id });
+      return;
+    }
     const amount = parseUnits(rewardStr, 6);
     setStep("approving");
     approve({
@@ -455,7 +461,8 @@ function CreateBounty() {
 // ── Resolve Bounty ─────────────────────────────────────────────────────────
 
 function ResolveBounty() {
-  const { address } = useAccount();
+  const { address, chainId } = useAccount();
+  const { switchChainAsync } = useSwitchChain();
   const [bountyIdStr, setBountyIdStr] = useState("");
   const [winnerAddr, setWinnerAddr] = useState("");
   const [score, setScore] = useState("80");
@@ -468,7 +475,7 @@ function ResolveBounty() {
   const [winnerPayoutChain, setWinnerPayoutChain] = useState("");
   const [resolvedReward, setResolvedReward] = useState<bigint>(BigInt(0));
 
-  const client = usePublicClient();
+  const client = usePublicClient({ chainId: arcTestnet.id });
 
   const { writeContract: resolve, data: resolveTxHash } = useWriteContract();
   const { isSuccess: resolveConfirmed } = useWaitForTransactionReceipt({
@@ -495,6 +502,10 @@ function ResolveBounty() {
 
   const handleResolve = async () => {
     if (!address || !bountyIdStr || !winnerAddr || !score || !client) return;
+    if (chainId !== arcTestnet.id) {
+      await switchChainAsync({ chainId: arcTestnet.id });
+      return;
+    }
     setStep("resolving");
 
     const bountyId = BigInt(bountyIdStr);
