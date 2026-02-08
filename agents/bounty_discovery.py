@@ -41,11 +41,21 @@ class BountyDetails:
     bounty_id: int
     sponsor: str
     target_contract: str
-    reward_wei: int
+    reward_usdc: int  # USDC amount in 6-decimal units (1 USDC = 1_000_000)
     deadline: int
     active: bool
     resolved: bool
     winner: str
+
+    @property
+    def reward_wei(self) -> int:
+        """Backward-compatible alias."""
+        return self.reward_usdc
+
+    @property
+    def reward_display(self) -> str:
+        """Human-readable USDC amount."""
+        return f"{self.reward_usdc / 1e6:.2f} USDC"
 
 
 class RegistryClient:
@@ -80,7 +90,7 @@ class RegistryClient:
             bounty_id=bounty_id,
             sponsor=sponsor,
             target_contract=target_contract,
-            reward_wei=int(reward),
+            reward_usdc=int(reward),
             deadline=int(deadline),
             active=bool(active),
             resolved=bool(resolved),
