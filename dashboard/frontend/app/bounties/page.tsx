@@ -727,7 +727,7 @@ function CreateBounty() {
     if (approveConfirmed && step === "approving") {
       console.log("Approval confirmed, moving to create step...");
       if (!address) return;
-      
+
       const amount = parseUnits(rewardStr, 6);
       const deadline = BigInt(
         Math.floor(Date.now() / 1000) + Number(daysFromNow) * 86400,
@@ -735,21 +735,24 @@ function CreateBounty() {
 
       // Advance step before calling write to prevent double-call
       setStep("creating");
-      
-      create({
-        address: CONTRACTS.REGISTRY,
-        abi: REGISTRY_ABI,
-        functionName: "createBounty",
-        args: [target as `0x${string}`, deadline, amount],
-        account: address as `0x${string}`,
-        chainId: arcTestnet.id,
-      }, {
-        onError: (err) => {
-          console.error("Failed to create bounty tx:", err);
-          // If the user rejects the signature, we should go back to form or show error
-          // setStep("form") is handled by the other useEffect checking createError
-        }
-      });
+
+      create(
+        {
+          address: CONTRACTS.REGISTRY,
+          abi: REGISTRY_ABI,
+          functionName: "createBounty",
+          args: [target as `0x${string}`, deadline, amount],
+          account: address as `0x${string}`,
+          chainId: arcTestnet.id,
+        },
+        {
+          onError: (err) => {
+            console.error("Failed to create bounty tx:", err);
+            // If the user rejects the signature, we should go back to form or show error
+            // setStep("form") is handled by the other useEffect checking createError
+          },
+        },
+      );
     }
   }, [approveConfirmed, step, rewardStr, daysFromNow, target, create, address]);
 

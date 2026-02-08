@@ -7,6 +7,8 @@ import remarkGfm from "remark-gfm";
 import Link from "next/link";
 import { ConnectKitButton } from "connectkit";
 
+import Loader from "./components/Loader";
+
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
 type ProgressEvent = {
@@ -426,7 +428,14 @@ export default function Home() {
           </div>
           <div style={{ marginTop: 16 }}>
             <button onClick={handleSubmit} disabled={!file || isRunning}>
-              {isRunning ? "Running..." : "Run Agent"}
+              {isRunning ? (
+                <div className="flex items-center justify-center">
+                  <Loader size="small" />
+                  <span style={{ marginLeft: "8px" }}>Running...</span>
+                </div>
+              ) : (
+                "Run Agent"
+              )}
             </button>
           </div>
           <div className="badge-group" style={{ marginTop: 16 }}>
