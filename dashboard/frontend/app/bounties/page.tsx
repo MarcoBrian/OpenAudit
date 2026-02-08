@@ -167,7 +167,6 @@ function BountyList({ onSelect }: { onSelect: (b: Bounty) => void }) {
           abi: REGISTRY_ABI,
           functionName: "bounties" as const,
           args: [BigInt(i)],
-          authorizationList: [],
         });
         const [
           sponsor,
@@ -330,7 +329,6 @@ function BountyDetail({
         abi: REGISTRY_ABI,
         functionName: "getBountySubmitters",
         args: [BigInt(bounty.id)],
-        authorizationList: [],
       })
       .then((data) => {
         setSubmitters((data as string[]) || []);
@@ -479,7 +477,6 @@ function SubmissionItem({
         abi: REGISTRY_ABI,
         functionName: "findings",
         args: [BigInt(bounty.id), agent as `0x${string}`],
-        authorizationList: [],
       })
       .then((data) => {
         const [ag, reportCID, submittedAt] = data as [string, string, bigint];
@@ -533,7 +530,6 @@ function SubmissionItem({
         abi: REGISTRY_ABI,
         functionName: "ownerToAgentId",
         args: [agent as `0x${string}`],
-        authorizationList: [],
       });
       if (agentId && Number(agentId) > 0) {
         const chain = await client.readContract({
@@ -541,7 +537,6 @@ function SubmissionItem({
           abi: REGISTRY_ABI,
           functionName: "getPayoutChain",
           args: [agentId as bigint],
-          authorizationList: [],
         });
         setWinnerPayoutChain(chain as string);
       } else {

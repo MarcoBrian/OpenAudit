@@ -15,7 +15,7 @@ export const arcTestnet: Chain = {
     default: {
       http: [
         process.env.NEXT_PUBLIC_ARC_TESTNET_RPC_URL ||
-          "https://rpc-testnet.arc.network",
+          "https://arc-testnet.g.alchemy.com/v2/0NGmDdPvkohc6Xq0vi92Z",
       ],
     },
   },
