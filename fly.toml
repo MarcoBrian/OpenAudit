@@ -1,34 +1,36 @@
-# fly.toml app configuration file generated for openaudit-backend
+# fly.toml app configuration file generated for openaudit-backend on 2026-02-09T00:35:23+08:00
+#
 # See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
 
-app = "openaudit-backend"
-primary_region = "iad"
+app = 'openaudit-backend'
+primary_region = 'iad'
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = 'Dockerfile'
 
 [env]
-  PORT = "8000"
+  PORT = '8000'
+
+[processes]
+  app = 'uvicorn dashboard.server.app:app --host 0.0.0.0 --port 8000'
 
 [http_service]
   internal_port = 8000
   force_https = true
-  auto_stop_machines = true
+  auto_stop_machines = 'stop'
   auto_start_machines = true
   min_machines_running = 0
-  processes = ["app"]
+  processes = ['app']
 
-[[http_service.checks]]
-  grace_period = "10s"
-  interval = "30s"
-  method = "GET"
-  timeout = "5s"
-  path = "/"
-
-[processes]
-  app = "uvicorn dashboard.server.app:app --host 0.0.0.0 --port 8000"
+  [[http_service.checks]]
+    interval = '30s'
+    timeout = '5s'
+    grace_period = '10s'
+    method = 'GET'
+    path = '/'
 
 [[vm]]
-  cpu_kind = "shared"
+  cpu_kind = 'shared'
   cpus = 1
   memory_mb = 512

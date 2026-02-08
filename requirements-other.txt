@@ -1,0 +1,6 @@
+ollama>=0.1.0
+slither-analyzer
+solc-select
+coinbase-agentkit>=0.7.4
+coinbase-agentkit-langchain==0.7.0
+web3>=6.0.0
