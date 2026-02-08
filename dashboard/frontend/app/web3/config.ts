@@ -32,9 +32,9 @@ export const arcTestnet: Chain = {
 
 export const CONTRACTS = {
   REGISTRY: (process.env.NEXT_PUBLIC_REGISTRY_ADDRESS ||
-    "0x0000000000000000000000000000000000000000") as `0x${string}`,
+    "0xb3b612a624c68672befd864935d09d85758d4024") as `0x${string}`,
   USDC: (process.env.NEXT_PUBLIC_USDC_ADDRESS ||
-    "0x3600000000000000000000000000000000000000") as `0x${string}`,
+    "0x1B26905E8bF393d27A2AAcf971550B322321426a") as `0x${string}`,
 } as const;
 
 // ── Supported chains ────────────────────────────────────────────────────────

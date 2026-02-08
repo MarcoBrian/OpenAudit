@@ -338,7 +338,8 @@ function BountyDetail({
       .catch(() => setSubmitters([]));
   }, [bounty.id, client]);
 
-  const isSponsor = address && address.toLowerCase() === bounty.sponsor.toLowerCase();
+  const isSponsor =
+    address && address.toLowerCase() === bounty.sponsor.toLowerCase();
 
   return (
     <div>
@@ -457,8 +458,12 @@ function SubmissionItem({
   const { address, chainId } = useAccount();
   const { switchChainAsync } = useSwitchChain();
   const [score, setScore] = useState("80");
-  const [step, setStep] = useState<"idle" | "resolving" | "bridging" | "done">("idle");
-  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>({ state: "idle" });
+  const [step, setStep] = useState<"idle" | "resolving" | "bridging" | "done">(
+    "idle",
+  );
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>({
+    state: "idle",
+  });
   const [winnerPayoutChain, setWinnerPayoutChain] = useState("");
 
   const { writeContract: resolve, data: resolveTxHash } = useWriteContract();
@@ -515,35 +520,35 @@ function SubmissionItem({
   };
 
   const handleResolve = async () => {
-        if (!address || !client) return;
-        if (chainId !== arcTestnet.id) {
-          await switchChainAsync({ chainId: arcTestnet.id });
-          return;
-        }
+    if (!address || !client) return;
+    if (chainId !== arcTestnet.id) {
+      await switchChainAsync({ chainId: arcTestnet.id });
+      return;
+    }
 
     // Check payout chain
     try {
       const agentId = await client.readContract({
-         address: CONTRACTS.REGISTRY,
-         abi: REGISTRY_ABI,
-         functionName: "ownerToAgentId",
-         args: [agent as `0x${string}`],
-         authorizationList: [],
+        address: CONTRACTS.REGISTRY,
+        abi: REGISTRY_ABI,
+        functionName: "ownerToAgentId",
+        args: [agent as `0x${string}`],
+        authorizationList: [],
       });
       if (agentId && Number(agentId) > 0) {
         const chain = await client.readContract({
-           address: CONTRACTS.REGISTRY,
-           abi: REGISTRY_ABI,
-           functionName: "getPayoutChain",
-           args: [agentId as bigint],
-           authorizationList: [],
+          address: CONTRACTS.REGISTRY,
+          abi: REGISTRY_ABI,
+          functionName: "getPayoutChain",
+          args: [agentId as bigint],
+          authorizationList: [],
         });
         setWinnerPayoutChain(chain as string);
       } else {
         setWinnerPayoutChain("arc");
       }
     } catch {
-       setWinnerPayoutChain("arc");
+      setWinnerPayoutChain("arc");
     }
 
     setStep("resolving");
@@ -552,7 +557,7 @@ function SubmissionItem({
       abi: REGISTRY_ABI,
       functionName: "resolveBounty",
       args: [BigInt(bounty.id), agent as `0x${string}`, BigInt(score)],
-      chain: arcTestnet,
+      chainId: arcTestnet.id,
       account: address as `0x${string}`,
     });
   };
@@ -578,11 +583,19 @@ function SubmissionItem({
           </div>
         </div>
         <div>
-          {bounty.resolved && bounty.winner.toLowerCase() === agent.toLowerCase() && (
-             <span className="badge" style={{ background: "#dcfce7", color: "#166534", marginRight: "1rem" }}>
-               WINNER
-             </span>
-          )}
+          {bounty.resolved &&
+            bounty.winner.toLowerCase() === agent.toLowerCase() && (
+              <span
+                className="badge"
+                style={{
+                  background: "#dcfce7",
+                  color: "#166534",
+                  marginRight: "1rem",
+                }}
+              >
+                WINNER
+              </span>
+            )}
           <button className="secondary" onClick={toggleReport}>
             {expanded ? "Hide Report" : "Read Report"}
           </button>
@@ -603,39 +616,63 @@ function SubmissionItem({
           {loadingReport ? (
             <div className="muted">Fetching IPFS content...</div>
           ) : reportData ? (
-             <pre style={{ margin: 0, fontSize: "0.85em", color: "#ccc" }}>
-               {JSON.stringify(reportData, null, 2)}
-             </pre>
+            <pre style={{ margin: 0, fontSize: "0.85em", color: "#ccc" }}>
+              {JSON.stringify(reportData, null, 2)}
+            </pre>
           ) : (
-            <div className="muted">Could not load report data. CID: {finding.reportCID}</div>
+            <div className="muted">
+              Could not load report data. CID: {finding.reportCID}
+            </div>
           )}
-          
+
           {/* Resolution UI for Sponsor */}
           {isSponsor && bounty.active && !bounty.resolved && (
-             <div style={{ marginTop: "1.5rem", borderTop: "1px solid #333", paddingTop: "1rem" }}>
-               <h4 style={{ marginBottom: "0.5rem" }}>Accept this Submission</h4>
-               {step === "idle" ? (
-                 <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
-                   <label className="muted" style={{ fontSize: "0.9em" }}>Score (0-100):</label>
-                   <input 
-                     type="number" 
-                     value={score} 
-                     onChange={e => setScore(e.target.value)}
-                     min="0" max="100"
-                     style={{ width: "80px", padding: "4px" }} 
-                   />
-                   <button onClick={handleResolve} style={{ background: "#16a34a", color: "#fff", border: "none" }}>
-                     Win & Pay {formatUnits(bounty.reward, 6)} USDC
-                   </button>
-                 </div>
-               ) : (
-                 <div className="muted">
-                    {step === "resolving" && "Resolving on-chain..."}
-                    {step === "bridging" && "Bridging payout..."}
-                    {step === "done" && <span style={{ color: "#16a34a" }}>Payment Settled! Bounty Closed.</span>}
-                 </div>
-               )}
-             </div>
+            <div
+              style={{
+                marginTop: "1.5rem",
+                borderTop: "1px solid #333",
+                paddingTop: "1rem",
+              }}
+            >
+              <h4 style={{ marginBottom: "0.5rem" }}>Accept this Submission</h4>
+              {step === "idle" ? (
+                <div
+                  style={{ display: "flex", gap: "1rem", alignItems: "center" }}
+                >
+                  <label className="muted" style={{ fontSize: "0.9em" }}>
+                    Score (0-100):
+                  </label>
+                  <input
+                    type="number"
+                    value={score}
+                    onChange={(e) => setScore(e.target.value)}
+                    min="0"
+                    max="100"
+                    style={{ width: "80px", padding: "4px" }}
+                  />
+                  <button
+                    onClick={handleResolve}
+                    style={{
+                      background: "#16a34a",
+                      color: "#fff",
+                      border: "none",
+                    }}
+                  >
+                    Win & Pay {formatUnits(bounty.reward, 6)} USDC
+                  </button>
+                </div>
+              ) : (
+                <div className="muted">
+                  {step === "resolving" && "Resolving on-chain..."}
+                  {step === "bridging" && "Bridging payout..."}
+                  {step === "done" && (
+                    <span style={{ color: "#16a34a" }}>
+                      Payment Settled! Bounty Closed.
+                    </span>
+                  )}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}
@@ -655,18 +692,31 @@ function CreateBounty() {
     "form",
   );
 
-  const { writeContract: approve, data: approveTxHash } = useWriteContract();
-  const { writeContract: create, data: createTxHash } = useWriteContract();
+  const {
+    writeContract: approve,
+    data: approveTxHash,
+    error: approveError,
+  } = useWriteContract();
+  const {
+    writeContract: create,
+    data: createTxHash,
+    error: createError,
+  } = useWriteContract();
 
-  const { isSuccess: approveConfirmed } = useWaitForTransactionReceipt({
-    hash: approveTxHash,
-  });
-  const { isSuccess: createConfirmed } = useWaitForTransactionReceipt({
-    hash: createTxHash,
-  });
+  const { isSuccess: approveConfirmed, isLoading: isApproving } =
+    useWaitForTransactionReceipt({
+      hash: approveTxHash,
+      chainId: arcTestnet.id,
+    });
+  const { isSuccess: createConfirmed, isLoading: isCreating } =
+    useWaitForTransactionReceipt({
+      hash: createTxHash,
+      chainId: arcTestnet.id,
+    });
 
   useEffect(() => {
     if (approveConfirmed && step === "approving") {
+      console.log("Approval confirmed, moving to create step...");
       if (!address) return;
       setStep("creating");
       const amount = parseUnits(rewardStr, 6);
@@ -679,16 +729,24 @@ function CreateBounty() {
         functionName: "createBounty",
         args: [target as `0x${string}`, deadline, amount],
         account: address as `0x${string}`,
-        chain: arcTestnet,
+        chainId: arcTestnet.id,
       });
     }
   }, [approveConfirmed, step, rewardStr, daysFromNow, target, create, address]);
 
   useEffect(() => {
     if (createConfirmed && step === "creating") {
+      console.log("Bounty creation confirmed!");
       setStep("done");
     }
   }, [createConfirmed, step]);
+
+  useEffect(() => {
+    if (approveError || createError) {
+      console.error("Contract write error:", approveError || createError);
+      setStep("form");
+    }
+  }, [approveError, createError]);
 
   const handleSubmit = async () => {
     if (!address || !target || !rewardStr || !daysFromNow) return;
@@ -704,7 +762,7 @@ function CreateBounty() {
       functionName: "approve",
       args: [CONTRACTS.REGISTRY, amount],
       account: address as `0x${string}`,
-      chain: arcTestnet,
+      chainId: arcTestnet.id,
     });
   };
 
@@ -800,12 +858,24 @@ function CreateBounty() {
         disabled={step !== "form" || !target || !rewardStr}
         style={{ width: "100%" }}
       >
-        {step === "approving"
-          ? "Approving USDC..."
-          : step === "creating"
-            ? "Creating Bounty..."
-            : "Approve & Create Bounty"}
+        {step === "approving" ? (
+          <>
+            {isApproving ? "Waiting for Receipt..." : "Confirming Approval..."}
+          </>
+        ) : step === "creating" ? (
+          <>{isCreating ? "Confirming Bounty..." : "Creating Bounty..."}</>
+        ) : (
+          "Approve & Create Bounty"
+        )}
       </button>
+
+      {(approveError || createError) && (
+        <div
+          style={{ color: "#ef4444", fontSize: "0.85em", marginTop: "1rem" }}
+        >
+          Error: {(approveError || createError)?.message.slice(0, 100)}...
+        </div>
+      )}
     </div>
   );
 }
