@@ -70,7 +70,7 @@ contract DeployOpenAudit is Script {
 
         // Optionally transfer ownership to a judge address
         address judge = vm.envOr("JUDGE_ADDRESS", deployer);
-        if (judge != deployer) {
+        if (judge != deployer && judge != address(0)) {
             registry.transferOwnership(judge);
             console.log("Ownership transferred to judge:", judge);
         }
