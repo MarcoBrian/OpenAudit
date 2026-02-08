@@ -4,6 +4,10 @@ import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import Link from "next/link";
+import { ConnectKitButton } from "connectkit";
+
+import Loader from "./components/Loader";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
@@ -22,7 +26,13 @@ type JobResponse = {
   error?: { error: string };
 };
 
-type JsonValue = string | number | boolean | null | JsonValue[] | { [key: string]: JsonValue };
+type JsonValue =
+  | string
+  | number
+  | boolean
+  | null
+  | JsonValue[]
+  | { [key: string]: JsonValue };
 
 type RunHistory = {
   id: string;
@@ -66,7 +76,7 @@ const MarkdownInline = ({ value }: { value: string }) => {
         remarkPlugins={[remarkGfm]}
         components={{
           p: ({ children }) => <span>{children}</span>,
-          code: ({ children }) => <code>{children}</code>
+          code: ({ children }) => <code>{children}</code>,
         }}
       >
         {value}
@@ -96,7 +106,8 @@ const renderJson = (value: JsonValue, depth = 0): ReactNode => {
             <div className="json-key">{key}</div>
             {key.toLowerCase() === "severity" && typeof val === "string" ? (
               <div className={`badge ${severityClass(val)}`}>{val}</div>
-            ) : key.toLowerCase() === "confidence" && typeof val === "number" ? (
+            ) : key.toLowerCase() === "confidence" &&
+              typeof val === "number" ? (
               <div className="badge">Confidence: {val.toFixed(2)}</div>
             ) : typeof val === "object" && val !== null ? (
               <details>
@@ -166,7 +177,7 @@ const steps = [
   { key: "extract", label: "Extract" },
   { key: "triage", label: "Triage" },
   { key: "logic", label: "Logic" },
-  { key: "finalize", label: "Finalize" }
+  { key: "finalize", label: "Finalize" },
 ];
 
 export default function Home() {
@@ -180,7 +191,9 @@ export default function Home() {
   const [jobId, setJobId] = useState<string | null>(null);
   const [status, setStatus] = useState<string>("idle");
   const [events, setEvents] = useState<ProgressEvent[]>([]);
-  const [submission, setSubmission] = useState<Record<string, unknown> | null>(null);
+  const [submission, setSubmission] = useState<Record<string, unknown> | null>(
+    null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [artifacts, setArtifacts] = useState<string[]>([]);
@@ -273,7 +286,9 @@ export default function Home() {
 
         if (job.status === "completed" || job.status === "failed") {
           clearInterval(interval);
-          const artifactsRes = await fetch(`${API_BASE}/api/jobs/${jobId}/artifacts`);
+          const artifactsRes = await fetch(
+            `${API_BASE}/api/jobs/${jobId}/artifacts`,
+          );
           const artifactsPayload = await artifactsRes.json();
           if (active) {
             setArtifacts(artifactsPayload.artifacts ?? []);
@@ -309,15 +324,22 @@ export default function Home() {
 
     const res = await fetch(`${API_BASE}/api/jobs`, {
       method: "POST",
-      body: formData
+      body: formData,
     });
     const payload = await res.json();
     setJobId(payload.job_id);
     setStatus("queued");
-    setHistory((prev) => [
-      { id: payload.job_id, fileName: file.name, status: "running", createdAt: new Date().toISOString() },
-      ...prev
-    ].slice(0, 10));
+    setHistory((prev) =>
+      [
+        {
+          id: payload.job_id,
+          fileName: file.name,
+          status: "running",
+          createdAt: new Date().toISOString(),
+        },
+        ...prev,
+      ].slice(0, 10),
+    );
   };
 
   const handleChatSend = async () => {
@@ -409,9 +431,7 @@ export default function Home() {
   useEffect(() => {
     if (!jobId) return;
     setHistory((prev) =>
-      prev.map((run) =>
-        run.id === jobId ? { ...run, status } : run
-      )
+      prev.map((run) => (run.id === jobId ? { ...run, status } : run)),
     );
   }, [jobId, status]);
 
@@ -450,39 +470,52 @@ export default function Home() {
   const submissionSeverity =
     typeof submission?.severity === "string" ? submission.severity : undefined;
   const submissionConfidence =
-    typeof submission?.confidence === "number" ? submission.confidence : undefined;
-  const submissionTitle = typeof submission?.title === "string" ? submission.title : undefined;
-  const submissionImpact = typeof submission?.impact === "string" ? submission.impact : undefined;
+    typeof submission?.confidence === "number"
+      ? submission.confidence
+      : undefined;
+  const submissionTitle =
+    typeof submission?.title === "string" ? submission.title : undefined;
+  const submissionImpact =
+    typeof submission?.impact === "string" ? submission.impact : undefined;
   const submissionDescription =
-    typeof submission?.description === "string" ? submission.description : undefined;
+    typeof submission?.description === "string"
+      ? submission.description
+      : undefined;
   const submissionRemediation =
-    typeof submission?.remediation === "string" ? submission.remediation : undefined;
-  const submissionRepro = typeof submission?.repro === "string" ? submission.repro : undefined;
+    typeof submission?.remediation === "string"
+      ? submission.remediation
+      : undefined;
+  const submissionRepro =
+    typeof submission?.repro === "string" ? submission.repro : undefined;
 
   const elapsed = useMemo(() => {
     if (!events.length) return null;
     const start = parseTimestamp(events[0].timestamp);
-    const end = parseTimestamp(events[events.length - 1].timestamp) ?? Date.now();
+    const end =
+      parseTimestamp(events[events.length - 1].timestamp) ?? Date.now();
     if (!start) return null;
     return end - start;
   }, [events]);
 
   const stepStatus = (key: string) => {
     const relevant = events.filter((event) =>
-      key === "scan" ? event.step.startsWith("scan") : event.step === key
+      key === "scan" ? event.step.startsWith("scan") : event.step === key,
     );
     if (relevant.some((event) => event.status === "failed")) return "failed";
     if (relevant.some((event) => event.status === "running")) return "running";
-    if (relevant.some((event) => event.status === "completed")) return "completed";
+    if (relevant.some((event) => event.status === "completed"))
+      return "completed";
     return "pending";
   };
 
   const stepDuration = (key: string) => {
     const relevant = events.filter((event) =>
-      key === "scan" ? event.step.startsWith("scan") : event.step === key
+      key === "scan" ? event.step.startsWith("scan") : event.step === key,
     );
     const startEvent = relevant.find((event) => event.status === "running");
-    const endEvent = [...relevant].reverse().find((event) => event.status === "completed");
+    const endEvent = [...relevant]
+      .reverse()
+      .find((event) => event.status === "completed");
     const start = parseTimestamp(startEvent?.timestamp);
     const end = parseTimestamp(endEvent?.timestamp);
     if (!start || !end) return null;
@@ -491,7 +524,10 @@ export default function Home() {
 
   const hasLaterTerminal = (index: number, step: string) => {
     for (let i = index + 1; i < events.length; i += 1) {
-      if (events[i].step === step && (events[i].status === "completed" || events[i].status === "failed")) {
+      if (
+        events[i].step === step &&
+        (events[i].status === "completed" || events[i].status === "failed")
+      ) {
         return true;
       }
     }
@@ -504,15 +540,27 @@ export default function Home() {
         <div className="brand">
           <div>
             <div className="title">OpenAudit</div>
-            <div className="muted">Autonomous smart‑contract security agent</div>
+            <div className="muted">
+              Autonomous smart‑contract security agent
+            </div>
           </div>
         </div>
-        <div className="header-right">
-          <div className="badge-group">
-            <div className="badge">Tools: {tools || "aderyn"}</div>
-            <div className="badge">{useLlm ? "LLM: ON" : "LLM: OFF"}</div>
-          </div>
-          <div className="status-pill">{statusLabel}</div>
+        <div
+          className="header-right"
+          style={{ display: "flex", alignItems: "center", gap: "1rem" }}
+        >
+          <Link
+            href="/bounties"
+            className="btn-link"
+            style={{
+              color: "#6877ed",
+              fontWeight: 600,
+              textDecoration: "none",
+            }}
+          >
+            Bounty Dashboard &rarr;
+          </Link>
+          <ConnectKitButton />
         </div>
       </header>
 
@@ -633,18 +681,29 @@ export default function Home() {
                   id="solidity-file"
                   type="file"
                   accept=".sol"
-                  onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
+                  onChange={(event) =>
+                    handleFileChange(event.target.files?.[0] ?? null)
+                  }
                 />
                 <label htmlFor="solidity-file" className="file-button">
                   Choose file
                 </label>
-                <span className="file-name">{fileName || "No file selected"}</span>
+                <span className="file-name">
+                  {fileName || "No file selected"}
+                </span>
               </div>
             </div>
           </div>
           <div style={{ marginTop: 16 }}>
             <button onClick={handleSubmit} disabled={!file || isRunning}>
-              {isRunning ? "Running..." : "Run Agent"}
+              {isRunning ? (
+                <div className="flex items-center justify-center">
+                  <Loader size="small" />
+                  <span style={{ marginLeft: "8px" }}>Running...</span>
+                </div>
+              ) : (
+                "Run Agent"
+              )}
             </button>
           </div>
           <div className="badge-group" style={{ marginTop: 16 }}>
@@ -672,7 +731,9 @@ export default function Home() {
                     min={1}
                     max={10}
                     value={maxIssues}
-                    onChange={(event) => setMaxIssues(Number(event.target.value))}
+                    onChange={(event) =>
+                      setMaxIssues(Number(event.target.value))
+                    }
                   />
                 </div>
               </div>
@@ -683,7 +744,9 @@ export default function Home() {
                     checked={useLlm}
                     onChange={(event) => setUseLlm(event.target.checked)}
                   />
-                  <span style={{ marginLeft: 8 }}>LLM triage + logic review</span>
+                  <span style={{ marginLeft: 8 }}>
+                    LLM triage + logic review
+                  </span>
                 </label>
               </div>
               <div className="row">
@@ -716,7 +779,8 @@ export default function Home() {
                 <div>
                   <div className="stepper-label">{step.label}</div>
                   <div className="muted" style={{ fontSize: 12 }}>
-                    {stepStatus(step.key)} · {formatDuration(stepDuration(step.key))}
+                    {stepStatus(step.key)} ·{" "}
+                    {formatDuration(stepDuration(step.key))}
                   </div>
                 </div>
               </div>
@@ -730,8 +794,8 @@ export default function Home() {
                   {event.status === "running" &&
                     event.step !== "queued" &&
                     !hasLaterTerminal(index, event.step) && (
-                    <span className="spinner" />
-                  )}
+                      <span className="spinner" />
+                    )}
                   <div>
                     <strong>{event.step}</strong>
                     <div className="muted" style={{ fontSize: 13 }}>
@@ -757,7 +821,9 @@ export default function Home() {
                 </div>
               )}
               {typeof submissionConfidence === "number" && (
-                <div className="badge">Confidence: {submissionConfidence.toFixed(2)}</div>
+                <div className="badge">
+                  Confidence: {submissionConfidence.toFixed(2)}
+                </div>
               )}
             </div>
             <div className="top-title">{submissionTitle}</div>
@@ -786,34 +852,38 @@ export default function Home() {
       <div className="grid">
         <div className="card">
           <div className="section-title">Submission JSON</div>
-        <div className="badge-group" style={{ marginBottom: 12 }}>
-          {submissionSeverity && (
-            <div className={`badge ${severityClass(submissionSeverity)}`}>
-              Severity: {submissionSeverity}
-            </div>
-          )}
-          {typeof submissionConfidence === "number" && (
-            <div className="badge">Confidence: {submissionConfidence.toFixed(2)}</div>
-          )}
-        </div>
-        {submission ? (
-          <div className="json-viewer">{renderJson(submission as JsonValue)}</div>
-        ) : (
-          <div className="callout">
-            <div className="callout-title">No submission yet</div>
-            <div className="muted">
-              Run the agent to generate a structured security report.
-            </div>
+          <div className="badge-group" style={{ marginBottom: 12 }}>
+            {submissionSeverity && (
+              <div className={`badge ${severityClass(submissionSeverity)}`}>
+                Severity: {submissionSeverity}
+              </div>
+            )}
+            {typeof submissionConfidence === "number" && (
+              <div className="badge">
+                Confidence: {submissionConfidence.toFixed(2)}
+              </div>
+            )}
           </div>
-        )}
-        {error && (
-          <>
-            <div className="badge" style={{ marginTop: 12 }}>
-              Error
+          {submission ? (
+            <div className="json-viewer">
+              {renderJson(submission as JsonValue)}
             </div>
-            <pre>{error}</pre>
-          </>
-        )}
+          ) : (
+            <div className="callout">
+              <div className="callout-title">No submission yet</div>
+              <div className="muted">
+                Run the agent to generate a structured security report.
+              </div>
+            </div>
+          )}
+          {error && (
+            <>
+              <div className="badge" style={{ marginTop: 12 }}>
+                Error
+              </div>
+              <pre>{error}</pre>
+            </>
+          )}
         </div>
 
         <div className="card">

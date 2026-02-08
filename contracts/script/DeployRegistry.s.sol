@@ -6,12 +6,13 @@ import "../src/OpenAuditRegistry.sol";
 import "../src/ERC6551Account.sol";
 import "../src/mocks/MockERC6551Registry.sol";
 import "../src/mocks/MockENS.sol";
+import "../src/mocks/MockERC20.sol";
 
 /**
  * @title DeployOpenAudit
  * @notice Deploy OpenAuditRegistry with ERC-6551 + ENS infrastructure
  *
- *   forge script script/DeployRegistry.s.sol:DeployOpenAudit --rpc-url $RPC_URL --broadcast
+ *   forge script script/DeployRegistry.s.sol:DeployOpenAudit --rpc-url base-sepolia --broadcast
  */
 contract DeployOpenAudit is Script {
     function run() external {
@@ -23,6 +24,8 @@ contract DeployOpenAudit is Script {
         address ensRegAddr  = vm.envOr("ENS_REGISTRY", address(0));
         address ensResAddr  = vm.envOr("ENS_RESOLVER", address(0));
         bytes32 parentNode  = vm.envOr("ENS_PARENT_NODE", keccak256("openaudit.eth"));
+        address usdcAddr    = vm.envOr("USDC_ADDRESS", address(0));
+        address relayAddr   = vm.envOr("PAYOUT_RELAY", deployer);
 
         console.log("Deployer:", deployer);
         console.log("Chain ID:", block.chainid);
@@ -49,6 +52,13 @@ contract DeployOpenAudit is Script {
             ensResAddr = address(mockRes);
             console.log("MockENSResolver:", ensResAddr);
         }
+        if (usdcAddr == address(0)) {
+            MockERC20 mockUsdc = new MockERC20("USD Coin", "USDC", 6);
+            usdcAddr = address(mockUsdc);
+            console.log("MockERC20 (USDC):", usdcAddr);
+        }
+
+        console.log("Payout relay:", relayAddr);
 
         // Deploy registry
         OpenAuditRegistry registry = new OpenAuditRegistry(
@@ -56,7 +66,9 @@ contract DeployOpenAudit is Script {
             address(tbaImpl),
             ensRegAddr,
             ensResAddr,
-            parentNode
+            parentNode,
+            usdcAddr,
+            relayAddr
         );
         console.log("OpenAuditRegistry:", address(registry));
 
@@ -96,6 +108,7 @@ contract DeployLocal is Script {
         MockERC6551Registry erc6551Reg = new MockERC6551Registry();
         MockENSRegistry ensReg = new MockENSRegistry();
         MockENSResolver ensRes = new MockENSResolver();
+        MockERC20 mockUsdc = new MockERC20("USD Coin", "USDC", 6);
 
         bytes32 parentNode = keccak256("openaudit.eth");
 
@@ -104,7 +117,9 @@ contract DeployLocal is Script {
             address(tbaImpl),
             address(ensReg),
             address(ensRes),
-            parentNode
+            parentNode,
+            address(mockUsdc),
+            deployer  // relay = deployer for local testing
         );
 
         // Give registry ENS parent node ownership
@@ -117,5 +132,6 @@ contract DeployLocal is Script {
         console.log("ERC6551Registry:", address(erc6551Reg));
         console.log("ENSRegistry:", address(ensReg));
         console.log("ENSResolver:", address(ensRes));
+        console.log("MockUSDC:", address(mockUsdc));
     }
 }
