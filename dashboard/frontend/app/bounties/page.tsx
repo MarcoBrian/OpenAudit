@@ -710,6 +710,14 @@ function CreateBounty() {
     error: createError,
   } = useWriteContract();
 
+  const { data: usdcBalance } = useReadContract({
+    address: CONTRACTS.USDC,
+    abi: ERC20_ABI,
+    functionName: "balanceOf",
+    args: [address as `0x${string}`],
+    chainId: arcTestnet.id,
+  });
+
   const { isSuccess: approveConfirmed, isLoading: isApproving } =
     useWaitForTransactionReceipt({
       hash: approveTxHash,
@@ -777,6 +785,14 @@ function CreateBounty() {
       return;
     }
     const amount = parseUnits(rewardStr, 6);
+
+    if (usdcBalance !== undefined && amount > (usdcBalance as bigint)) {
+      alert(
+        "Insufficient USDC balance! Please get testnet USDC from the faucet.",
+      );
+      return;
+    }
+
     setStep("approving");
     approve({
       address: CONTRACTS.USDC,
@@ -854,6 +870,14 @@ function CreateBounty() {
           disabled={step !== "form"}
           min="1"
         />
+        {usdcBalance !== undefined && (
+          <div
+            className="muted"
+            style={{ fontSize: "0.8em", marginTop: "0.25rem" }}
+          >
+            Balance: {formatUnits(usdcBalance as bigint, 6)} USDC
+          </div>
+        )}
       </div>
       <div style={{ marginBottom: "1.5rem" }}>
         <label
@@ -906,6 +930,31 @@ function CreateBounty() {
           "Approve & Create Bounty"
         )}
       </button>
+
+      {usdcBalance !== undefined &&
+        parseUnits(rewardStr || "0", 6) > (usdcBalance as bigint) && (
+          <div
+            style={{
+              marginTop: "1rem",
+              padding: "0.75rem",
+              backgroundColor: "#fff3cd",
+              color: "#856404",
+              borderRadius: "0.25rem",
+              fontSize: "0.9em",
+            }}
+          >
+            Warning: Insufficient USDC balance.{" "}
+            <a
+              href="https://faucet.circle.com/"
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{ textDecoration: "underline", color: "inherit" }}
+            >
+              Get testnet USDC here
+            </a>
+            .
+          </div>
+        )}
 
       {(approveError || createError) && (
         <div
