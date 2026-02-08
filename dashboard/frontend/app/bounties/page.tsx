@@ -11,7 +11,7 @@ import {
   usePublicClient,
 } from "wagmi";
 import { formatUnits, parseUnits } from "viem";
-import { CONTRACTS, CHAIN_LABELS } from "../web3/config";
+import { CONTRACTS, CHAIN_LABELS, arcTestnet } from "../web3/config";
 import { REGISTRY_ABI, ERC20_ABI } from "../web3/abi";
 import {
   bridgePayout,
@@ -326,6 +326,7 @@ function CreateBounty() {
         abi: REGISTRY_ABI,
         functionName: "createBounty",
         args: [target as `0x${string}`, deadline, amount],
+        chainId: arcTestnet.id,
       });
     }
   }, [approveConfirmed, step, rewardStr, daysFromNow, target, create]);
@@ -344,6 +345,7 @@ function CreateBounty() {
       address: CONTRACTS.USDC,
       abi: ERC20_ABI,
       functionName: "approve",
+      chainId: arcTestnet.id,
       args: [CONTRACTS.REGISTRY, amount],
     });
   };
