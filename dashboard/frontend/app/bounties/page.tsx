@@ -45,7 +45,11 @@ export default function BountiesPage() {
           <Link
             href="/"
             className="title"
-            style={{ textDecoration: "none", fontSize: "24px", color: "inherit" }}
+            style={{
+              textDecoration: "none",
+              fontSize: "24px",
+              color: "inherit",
+            }}
           >
             OpenAudit
           </Link>
@@ -147,11 +151,11 @@ function BountyList() {
     for (let i = 1; i < count; i++) {
       try {
         const data = await client.readContract({
-          account: undefined,
           address: CONTRACTS.REGISTRY,
           abi: REGISTRY_ABI,
           functionName: "bounties" as const,
           args: [BigInt(i)],
+          authorizationList: [],
         });
         const [
           sponsor,
@@ -229,9 +233,7 @@ function BountyList() {
           </div>
 
           <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-            <div
-              style={{ display: "flex", justifyContent: "space-between" }}
-            >
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
               <span className="muted" style={{ fontSize: "0.9em" }}>
                 Reward
               </span>
@@ -245,9 +247,7 @@ function BountyList() {
                 {formatUnits(b.reward, 6)} USDC
               </span>
             </div>
-            <div
-              style={{ display: "flex", justifyContent: "space-between" }}
-            >
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
               <span className="muted" style={{ fontSize: "0.9em" }}>
                 Target
               </span>
@@ -260,9 +260,7 @@ function BountyList() {
                 {shortAddr(b.targetContract)}
               </span>
             </div>
-            <div
-              style={{ display: "flex", justifyContent: "space-between" }}
-            >
+            <div style={{ display: "flex", justifyContent: "space-between" }}>
               <span className="muted" style={{ fontSize: "0.9em" }}>
                 Deadline
               </span>
@@ -271,9 +269,7 @@ function BountyList() {
               </span>
             </div>
             {b.resolved && (
-              <div
-                style={{ display: "flex", justifyContent: "space-between" }}
-              >
+              <div style={{ display: "flex", justifyContent: "space-between" }}>
                 <span className="muted" style={{ fontSize: "0.9em" }}>
                   Winner
                 </span>
@@ -297,6 +293,7 @@ function BountyList() {
 // ── Create Bounty ──────────────────────────────────────────────────────────
 
 function CreateBounty() {
+  const { address } = useAccount();
   const [target, setTarget] = useState("");
   const [rewardStr, setRewardStr] = useState("");
   const [daysFromNow, setDaysFromNow] = useState("7");
@@ -316,6 +313,7 @@ function CreateBounty() {
 
   useEffect(() => {
     if (approveConfirmed && step === "approving") {
+      if (!address) return;
       setStep("creating");
       const amount = parseUnits(rewardStr, 6);
       const deadline = BigInt(
@@ -326,10 +324,11 @@ function CreateBounty() {
         abi: REGISTRY_ABI,
         functionName: "createBounty",
         args: [target as `0x${string}`, deadline, amount],
-        chainId: arcTestnet.id,
+        account: address as `0x${string}`,
+        chain: arcTestnet,
       });
     }
-  }, [approveConfirmed, step, rewardStr, daysFromNow, target, create]);
+  }, [approveConfirmed, step, rewardStr, daysFromNow, target, create, address]);
 
   useEffect(() => {
     if (createConfirmed && step === "creating") {
@@ -338,15 +337,16 @@ function CreateBounty() {
   }, [createConfirmed, step]);
 
   const handleSubmit = () => {
-    if (!target || !rewardStr || !daysFromNow) return;
+    if (!address || !target || !rewardStr || !daysFromNow) return;
     const amount = parseUnits(rewardStr, 6);
     setStep("approving");
     approve({
       address: CONTRACTS.USDC,
       abi: ERC20_ABI,
       functionName: "approve",
-      chainId: arcTestnet.id,
       args: [CONTRACTS.REGISTRY, amount],
+      account: address as `0x${string}`,
+      chain: arcTestnet,
     });
   };
 
@@ -381,7 +381,11 @@ function CreateBounty() {
       <div style={{ marginBottom: "1rem" }}>
         <label
           className="muted"
-          style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.9em" }}
+          style={{
+            display: "block",
+            marginBottom: "0.5rem",
+            fontSize: "0.9em",
+          }}
         >
           Target Contract Address
         </label>
@@ -396,7 +400,11 @@ function CreateBounty() {
       <div style={{ marginBottom: "1rem" }}>
         <label
           className="muted"
-          style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.9em" }}
+          style={{
+            display: "block",
+            marginBottom: "0.5rem",
+            fontSize: "0.9em",
+          }}
         >
           Reward (USDC)
         </label>
@@ -412,7 +420,11 @@ function CreateBounty() {
       <div style={{ marginBottom: "1.5rem" }}>
         <label
           className="muted"
-          style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.9em" }}
+          style={{
+            display: "block",
+            marginBottom: "0.5rem",
+            fontSize: "0.9em",
+          }}
         >
           Deadline (days from now)
         </label>
@@ -443,6 +455,7 @@ function CreateBounty() {
 // ── Resolve Bounty ─────────────────────────────────────────────────────────
 
 function ResolveBounty() {
+  const { address } = useAccount();
   const [bountyIdStr, setBountyIdStr] = useState("");
   const [winnerAddr, setWinnerAddr] = useState("");
   const [score, setScore] = useState("80");
@@ -453,7 +466,7 @@ function ResolveBounty() {
     state: "idle",
   });
   const [winnerPayoutChain, setWinnerPayoutChain] = useState("");
-  const [resolvedReward, setResolvedReward] = useState<bigint>(0n);
+  const [resolvedReward, setResolvedReward] = useState<bigint>(BigInt(0));
 
   const client = usePublicClient();
 
@@ -481,7 +494,7 @@ function ResolveBounty() {
   }, [resolveConfirmed, step, resolvedReward, winnerAddr, winnerPayoutChain]);
 
   const handleResolve = async () => {
-    if (!bountyIdStr || !winnerAddr || !score || !client) return;
+    if (!address || !bountyIdStr || !winnerAddr || !score || !client) return;
     setStep("resolving");
 
     const bountyId = BigInt(bountyIdStr);
@@ -489,11 +502,11 @@ function ResolveBounty() {
     // Read bounty reward for bridge amount
     try {
       const data = await client.readContract({
-        account: undefined,
         address: CONTRACTS.REGISTRY,
         abi: REGISTRY_ABI,
         functionName: "bounties" as const,
         args: [bountyId],
+        authorizationList: [],
       });
       const [, , reward] = data as [
         string,
@@ -511,19 +524,19 @@ function ResolveBounty() {
 
     try {
       const agentId = await client.readContract({
-        account: undefined,
         address: CONTRACTS.REGISTRY,
         abi: REGISTRY_ABI,
         functionName: "ownerToAgentId" as const,
         args: [winnerAddr as `0x${string}`],
+        authorizationList: [],
       });
       if (agentId && Number(agentId) > 0) {
         const chain = await client.readContract({
-          account: undefined,
           address: CONTRACTS.REGISTRY,
           abi: REGISTRY_ABI,
           functionName: "getPayoutChain" as const,
           args: [agentId as bigint],
+          authorizationList: [],
         });
         setWinnerPayoutChain(chain as string);
       }
@@ -536,6 +549,8 @@ function ResolveBounty() {
       abi: REGISTRY_ABI,
       functionName: "resolveBounty",
       args: [bountyId, winnerAddr as `0x${string}`, BigInt(score)],
+      account: address as `0x${string}`,
+      chain: arcTestnet,
     });
   };
 
@@ -546,7 +561,7 @@ function ResolveBounty() {
           Bounty Settled!
         </h3>
         <p className="muted" style={{ marginBottom: "1rem" }}>
-          {resolvedReward > 0n
+          {resolvedReward > BigInt(0)
             ? `${formatUnits(resolvedReward, 6)} USDC`
             : "Reward"}{" "}
           {winnerPayoutChain && winnerPayoutChain !== "arc"
@@ -576,7 +591,11 @@ function ResolveBounty() {
       <div style={{ marginBottom: "1rem" }}>
         <label
           className="muted"
-          style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.9em" }}
+          style={{
+            display: "block",
+            marginBottom: "0.5rem",
+            fontSize: "0.9em",
+          }}
         >
           Bounty ID
         </label>
@@ -592,7 +611,11 @@ function ResolveBounty() {
       <div style={{ marginBottom: "1rem" }}>
         <label
           className="muted"
-          style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.9em" }}
+          style={{
+            display: "block",
+            marginBottom: "0.5rem",
+            fontSize: "0.9em",
+          }}
         >
           Winner Address
         </label>
@@ -607,7 +630,11 @@ function ResolveBounty() {
       <div style={{ marginBottom: "1.5rem" }}>
         <label
           className="muted"
-          style={{ display: "block", marginBottom: "0.5rem", fontSize: "0.9em" }}
+          style={{
+            display: "block",
+            marginBottom: "0.5rem",
+            fontSize: "0.9em",
+          }}
         >
           Reputation Score (0-100)
         </label>
@@ -635,20 +662,22 @@ function ResolveBounty() {
       </button>
 
       {step !== "form" && (
-        <div style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+        <div
+          style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}
+        >
           <StatusStep
             label="Resolve on-chain"
-            done={step !== "resolving"}
+            done={step === "bridging"}
             active={step === "resolving"}
           />
           <StatusStep
             label="Read payout chain from ENS"
-            done={step === "bridging" || step === "done"}
+            done={step === "bridging"}
             active={step === "resolving"}
           />
           <StatusStep
             label={`Bridge USDC → ${CHAIN_LABELS[winnerPayoutChain] || winnerPayoutChain || "destination"}`}
-            done={step === "done"}
+            done={false}
             active={step === "bridging"}
           />
         </div>
