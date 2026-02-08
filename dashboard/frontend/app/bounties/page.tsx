@@ -33,11 +33,25 @@ interface Bounty {
   winner: string;
 }
 
+interface Submission {
+  agent: string;
+  reportCID: string;
+  submittedAt: bigint;
+}
+
+const GATEWAY = "https://gateway.pinata.cloud/ipfs/";
+
 // ── Main Page ──────────────────────────────────────────────────────────────
 
 export default function BountiesPage() {
   const { isConnected } = useAccount();
-  const [tab, setTab] = useState<"bounties" | "create" | "resolve">("bounties");
+  const [tab, setTab] = useState<"bounties" | "create">("bounties");
+  const [selectedBounty, setSelectedBounty] = useState<Bounty | null>(null);
+
+  // Clear selection when switching tabs
+  useEffect(() => {
+    setSelectedBounty(null);
+  }, [tab]);
 
   return (
     <div className="container" style={{ minHeight: "80vh" }}>
@@ -61,48 +75,45 @@ export default function BountiesPage() {
         </div>
       </header>
 
-      <div className="row" style={{ marginBottom: "24px" }}>
-        <button
-          className={tab === "bounties" ? "" : "secondary"}
-          onClick={() => setTab("bounties")}
-        >
-          Active Bounties
-        </button>
-        <button
-          className={tab === "create" ? "" : "secondary"}
-          onClick={() => setTab("create")}
-        >
-          Create Bounty
-        </button>
-        <button
-          className={tab === "resolve" ? "" : "secondary"}
-          onClick={() => setTab("resolve")}
-        >
-          Resolve &amp; Settle
-        </button>
-      </div>
+      {!selectedBounty && (
+        <div className="row" style={{ marginBottom: "24px" }}>
+          <button
+            className={tab === "bounties" ? "" : "secondary"}
+            onClick={() => setTab("bounties")}
+          >
+            Active Bounties
+          </button>
+          <button
+            className={tab === "create" ? "" : "secondary"}
+            onClick={() => setTab("create")}
+          >
+            Create Bounty
+          </button>
+        </div>
+      )}
 
       <main>
-        {tab === "bounties" && <BountyList />}
-        {tab === "create" && (
-          <div className="card">
-            <div className="section-title">New Bounty</div>
-            {isConnected ? (
-              <CreateBounty />
-            ) : (
-              <ConnectPrompt action="create bounties" />
+        {selectedBounty ? (
+          <BountyDetail
+            bounty={selectedBounty}
+            onBack={() => setSelectedBounty(null)}
+          />
+        ) : (
+          <>
+            {tab === "bounties" && (
+              <BountyList onSelect={(b) => setSelectedBounty(b)} />
             )}
-          </div>
-        )}
-        {tab === "resolve" && (
-          <div className="card">
-            <div className="section-title">Resolve Bounty</div>
-            {isConnected ? (
-              <ResolveBounty />
-            ) : (
-              <ConnectPrompt action="resolve bounties" />
+            {tab === "create" && (
+              <div className="card">
+                <div className="section-title">New Bounty</div>
+                {isConnected ? (
+                  <CreateBounty />
+                ) : (
+                  <ConnectPrompt action="create bounties" />
+                )}
+              </div>
             )}
-          </div>
+          </>
         )}
       </main>
     </div>
@@ -133,7 +144,7 @@ function ConnectPrompt({ action }: { action: string }) {
 
 // ── Bounty List ────────────────────────────────────────────────────────────
 
-function BountyList() {
+function BountyList({ onSelect }: { onSelect: (b: Bounty) => void }) {
   const [bounties, setBounties] = useState<Bounty[]>([]);
   const [loading, setLoading] = useState(true);
   const client = usePublicClient({ chainId: arcTestnet.id });
@@ -284,9 +295,350 @@ function BountyList() {
                 </span>
               </div>
             )}
+            <button
+              style={{ marginTop: "1rem" }}
+              className="secondary"
+              onClick={() => onSelect(b)}
+            >
+              View Details & Submissions
+            </button>
           </div>
         </div>
       ))}
+    </div>
+  );
+}
+
+// ── Bounty Detail ──────────────────────────────────────────────────────────
+
+function BountyDetail({
+  bounty,
+  onBack,
+}: {
+  bounty: Bounty;
+  onBack: () => void;
+}) {
+  const { address } = useAccount();
+  const [submitters, setSubmitters] = useState<string[]>([]);
+  const client = usePublicClient({ chainId: arcTestnet.id });
+
+  useEffect(() => {
+    if (!client) return;
+    client
+      .readContract({
+        address: CONTRACTS.REGISTRY,
+        abi: REGISTRY_ABI,
+        functionName: "getBountySubmitters",
+        args: [BigInt(bounty.id)],
+        authorizationList: [],
+      })
+      .then((data) => {
+        setSubmitters((data as string[]) || []);
+      })
+      .catch(() => setSubmitters([]));
+  }, [bounty.id, client]);
+
+  const isSponsor = address && address.toLowerCase() === bounty.sponsor.toLowerCase();
+
+  return (
+    <div>
+      <div style={{ marginBottom: "1rem" }}>
+        <button className="secondary" onClick={onBack}>
+          ← Back to List
+        </button>
+      </div>
+
+      <div className="card" style={{ marginBottom: "2rem" }}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: "1rem",
+          }}
+        >
+          <h2>Bounty #{bounty.id}</h2>
+          <span
+            className="badge"
+            style={{
+              backgroundColor: bounty.resolved
+                ? "#dcfce7"
+                : bounty.active
+                  ? "#e0e7ff"
+                  : "#f3f4f6",
+              color: bounty.resolved
+                ? "#166534"
+                : bounty.active
+                  ? "#4338ca"
+                  : "#374151",
+            }}
+          >
+            {bounty.resolved
+              ? "Resolved"
+              : bounty.active
+                ? "Active"
+                : "Cancelled"}
+          </span>
+        </div>
+        <div className="grid" style={{ gridTemplateColumns: "1fr 1fr" }}>
+          <div>
+            <div className="muted" style={{ fontSize: "0.9em" }}>
+              Target Contract
+            </div>
+            <div style={{ fontFamily: "monospace", marginBottom: "1rem" }}>
+              {bounty.targetContract}
+            </div>
+            <div className="muted" style={{ fontSize: "0.9em" }}>
+              Sponsor
+            </div>
+            <div style={{ fontFamily: "monospace" }}>{bounty.sponsor}</div>
+          </div>
+          <div style={{ textAlign: "right" }}>
+            <div className="muted" style={{ fontSize: "0.9em" }}>
+              Reward
+            </div>
+            <div
+              style={{
+                fontSize: "1.5em",
+                fontWeight: 600,
+                color: "#16a34a",
+                marginBottom: "1rem",
+              }}
+            >
+              {formatUnits(bounty.reward, 6)} USDC
+            </div>
+            <div className="muted" style={{ fontSize: "0.9em" }}>
+              Deadline
+            </div>
+            <div>
+              {new Date(Number(bounty.deadline) * 1000).toLocaleDateString()}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <h3 style={{ marginBottom: "1rem" }}>
+        Submissions ({submitters.length})
+      </h3>
+      {submitters.length === 0 ? (
+        <div className="card text-center muted">No submissions yet.</div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+          {submitters.map((agent) => (
+            <SubmissionItem
+              key={agent}
+              agent={agent}
+              bounty={bounty}
+              isSponsor={!!isSponsor}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SubmissionItem({
+  agent,
+  bounty,
+  isSponsor,
+}: {
+  agent: string;
+  bounty: Bounty;
+  isSponsor: boolean;
+}) {
+  const [finding, setFinding] = useState<Submission | null>(null);
+  const client = usePublicClient({ chainId: arcTestnet.id });
+  const [expanded, setExpanded] = useState(false);
+  const [reportData, setReportData] = useState<any>(null);
+  const [loadingReport, setLoadingReport] = useState(false);
+
+  // Resolution state
+  const { address, chainId } = useAccount();
+  const { switchChainAsync } = useSwitchChain();
+  const [score, setScore] = useState("80");
+  const [step, setStep] = useState<"idle" | "resolving" | "bridging" | "done">("idle");
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>({ state: "idle" });
+  const [winnerPayoutChain, setWinnerPayoutChain] = useState("");
+
+  const { writeContract: resolve, data: resolveTxHash } = useWriteContract();
+  const { isSuccess: resolveConfirmed } = useWaitForTransactionReceipt({
+    hash: resolveTxHash,
+  });
+
+  useEffect(() => {
+    if (!client) return;
+    client
+      .readContract({
+        address: CONTRACTS.REGISTRY,
+        abi: REGISTRY_ABI,
+        functionName: "findings",
+        args: [BigInt(bounty.id), agent as `0x${string}`],
+        authorizationList: [],
+      })
+      .then((data) => {
+        const [ag, reportCID, submittedAt] = data as [string, string, bigint];
+        setFinding({ agent: ag, reportCID, submittedAt });
+      });
+  }, [bounty.id, agent, client]);
+
+  // Handle Bridging after resolution
+  useEffect(() => {
+    if (resolveConfirmed && step === "resolving") {
+      setStep("bridging");
+      bridgePayout(
+        {
+          amount: formatUnits(bounty.reward, 6),
+          recipientAddress: agent,
+          payoutChain: winnerPayoutChain,
+        },
+        setBridgeStatus,
+      ).then(() => setStep("done"));
+    }
+  }, [resolveConfirmed, step, bounty.reward, agent, winnerPayoutChain]);
+
+  const toggleReport = async () => {
+    if (!expanded) {
+      if (!reportData && finding?.reportCID) {
+        setLoadingReport(true);
+        try {
+          const res = await fetch(`${GATEWAY}${finding.reportCID}`);
+          const json = await res.json();
+          setReportData(json);
+        } catch (e) {
+          console.error("Failed to fetch report", e);
+        }
+        setLoadingReport(false);
+      }
+    }
+    setExpanded(!expanded);
+  };
+
+  const handleResolve = async () => {
+        if (!address || !client) return;
+        if (chainId !== arcTestnet.id) {
+          await switchChainAsync({ chainId: arcTestnet.id });
+          return;
+        }
+
+    // Check payout chain
+    try {
+      const agentId = await client.readContract({
+         address: CONTRACTS.REGISTRY,
+         abi: REGISTRY_ABI,
+         functionName: "ownerToAgentId",
+         args: [agent as `0x${string}`],
+         authorizationList: [],
+      });
+      if (agentId && Number(agentId) > 0) {
+        const chain = await client.readContract({
+           address: CONTRACTS.REGISTRY,
+           abi: REGISTRY_ABI,
+           functionName: "getPayoutChain",
+           args: [agentId as bigint],
+           authorizationList: [],
+        });
+        setWinnerPayoutChain(chain as string);
+      } else {
+        setWinnerPayoutChain("arc");
+      }
+    } catch {
+       setWinnerPayoutChain("arc");
+    }
+
+    setStep("resolving");
+    resolve({
+      address: CONTRACTS.REGISTRY,
+      abi: REGISTRY_ABI,
+      functionName: "resolveBounty",
+      args: [BigInt(bounty.id), agent as `0x${string}`, BigInt(score)],
+      chain: arcTestnet,
+      account: address as `0x${string}`,
+    });
+  };
+
+  if (!finding) return <div className="card muted">Loading finding...</div>;
+
+  return (
+    <div className="card">
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+        }}
+      >
+        <div>
+          <div style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
+            Agent: {shortAddr(finding.agent)}
+          </div>
+          <div className="muted" style={{ fontSize: "0.85em" }}>
+            Submitted:{" "}
+            {new Date(Number(finding.submittedAt) * 1000).toLocaleString()}
+          </div>
+        </div>
+        <div>
+          {bounty.resolved && bounty.winner.toLowerCase() === agent.toLowerCase() && (
+             <span className="badge" style={{ background: "#dcfce7", color: "#166534", marginRight: "1rem" }}>
+               WINNER
+             </span>
+          )}
+          <button className="secondary" onClick={toggleReport}>
+            {expanded ? "Hide Report" : "Read Report"}
+          </button>
+        </div>
+      </div>
+
+      {expanded && (
+        <div
+          style={{
+            marginTop: "1rem",
+            padding: "1rem",
+            background: "#111",
+            borderRadius: "8px",
+            border: "1px solid #333",
+            overflowX: "auto",
+          }}
+        >
+          {loadingReport ? (
+            <div className="muted">Fetching IPFS content...</div>
+          ) : reportData ? (
+             <pre style={{ margin: 0, fontSize: "0.85em", color: "#ccc" }}>
+               {JSON.stringify(reportData, null, 2)}
+             </pre>
+          ) : (
+            <div className="muted">Could not load report data. CID: {finding.reportCID}</div>
+          )}
+          
+          {/* Resolution UI for Sponsor */}
+          {isSponsor && bounty.active && !bounty.resolved && (
+             <div style={{ marginTop: "1.5rem", borderTop: "1px solid #333", paddingTop: "1rem" }}>
+               <h4 style={{ marginBottom: "0.5rem" }}>Accept this Submission</h4>
+               {step === "idle" ? (
+                 <div style={{ display: "flex", gap: "1rem", alignItems: "center" }}>
+                   <label className="muted" style={{ fontSize: "0.9em" }}>Score (0-100):</label>
+                   <input 
+                     type="number" 
+                     value={score} 
+                     onChange={e => setScore(e.target.value)}
+                     min="0" max="100"
+                     style={{ width: "80px", padding: "4px" }} 
+                   />
+                   <button onClick={handleResolve} style={{ background: "#16a34a", color: "#fff", border: "none" }}>
+                     Win & Pay {formatUnits(bounty.reward, 6)} USDC
+                   </button>
+                 </div>
+               ) : (
+                 <div className="muted">
+                    {step === "resolving" && "Resolving on-chain..."}
+                    {step === "bridging" && "Bridging payout..."}
+                    {step === "done" && <span style={{ color: "#16a34a" }}>Payment Settled! Bounty Closed.</span>}
+                 </div>
+               )}
+             </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -454,286 +806,6 @@ function CreateBounty() {
             ? "Creating Bounty..."
             : "Approve & Create Bounty"}
       </button>
-    </div>
-  );
-}
-
-// ── Resolve Bounty ─────────────────────────────────────────────────────────
-
-function ResolveBounty() {
-  const { address, chainId } = useAccount();
-  const { switchChainAsync } = useSwitchChain();
-  const [bountyIdStr, setBountyIdStr] = useState("");
-  const [winnerAddr, setWinnerAddr] = useState("");
-  const [score, setScore] = useState("80");
-  const [step, setStep] = useState<"form" | "resolving" | "bridging" | "done">(
-    "form",
-  );
-  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>({
-    state: "idle",
-  });
-  const [winnerPayoutChain, setWinnerPayoutChain] = useState("");
-  const [resolvedReward, setResolvedReward] = useState<bigint>(BigInt(0));
-
-  const client = usePublicClient({ chainId: arcTestnet.id });
-
-  const { writeContract: resolve, data: resolveTxHash } = useWriteContract();
-  const { isSuccess: resolveConfirmed } = useWaitForTransactionReceipt({
-    hash: resolveTxHash,
-  });
-
-  // After resolution confirmed, start bridging
-  useEffect(() => {
-    if (resolveConfirmed && step === "resolving") {
-      setStep("bridging");
-      // Initiate bridge
-      bridgePayout(
-        {
-          amount: formatUnits(resolvedReward, 6),
-          recipientAddress: winnerAddr,
-          payoutChain: winnerPayoutChain,
-        },
-        setBridgeStatus,
-      ).then(() => {
-        setStep("done");
-      });
-    }
-  }, [resolveConfirmed, step, resolvedReward, winnerAddr, winnerPayoutChain]);
-
-  const handleResolve = async () => {
-    if (!address || !bountyIdStr || !winnerAddr || !score || !client) return;
-    if (chainId !== arcTestnet.id) {
-      await switchChainAsync({ chainId: arcTestnet.id });
-      return;
-    }
-    setStep("resolving");
-
-    const bountyId = BigInt(bountyIdStr);
-
-    // Read bounty reward for bridge amount
-    try {
-      const data = await client.readContract({
-        address: CONTRACTS.REGISTRY,
-        abi: REGISTRY_ABI,
-        functionName: "bounties" as const,
-        args: [bountyId],
-        authorizationList: [],
-      });
-      const [, , reward] = data as [
-        string,
-        string,
-        bigint,
-        bigint,
-        boolean,
-        boolean,
-        string,
-      ];
-      setResolvedReward(reward);
-    } catch {
-      // fallback
-    }
-
-    try {
-      const agentId = await client.readContract({
-        address: CONTRACTS.REGISTRY,
-        abi: REGISTRY_ABI,
-        functionName: "ownerToAgentId" as const,
-        args: [winnerAddr as `0x${string}`],
-        authorizationList: [],
-      });
-      if (agentId && Number(agentId) > 0) {
-        const chain = await client.readContract({
-          address: CONTRACTS.REGISTRY,
-          abi: REGISTRY_ABI,
-          functionName: "getPayoutChain" as const,
-          args: [agentId as bigint],
-          authorizationList: [],
-        });
-        setWinnerPayoutChain(chain as string);
-      }
-    } catch {
-      setWinnerPayoutChain("arc");
-    }
-
-    resolve({
-      address: CONTRACTS.REGISTRY,
-      abi: REGISTRY_ABI,
-      functionName: "resolveBounty",
-      args: [bountyId, winnerAddr as `0x${string}`, BigInt(score)],
-      account: address as `0x${string}`,
-      chain: arcTestnet,
-    });
-  };
-
-  if (step === "done") {
-    return (
-      <div style={{ textAlign: "center", padding: "1rem" }}>
-        <h3 style={{ color: "#16a34a", marginBottom: "0.5rem" }}>
-          Bounty Settled!
-        </h3>
-        <p className="muted" style={{ marginBottom: "1rem" }}>
-          {resolvedReward > BigInt(0)
-            ? `${formatUnits(resolvedReward, 6)} USDC`
-            : "Reward"}{" "}
-          {winnerPayoutChain && winnerPayoutChain !== "arc"
-            ? `bridged to ${CHAIN_LABELS[winnerPayoutChain] || winnerPayoutChain}`
-            : "settled on Arc"}
-        </p>
-        <button
-          onClick={() => {
-            setStep("form");
-            setBountyIdStr("");
-            setWinnerAddr("");
-          }}
-        >
-          Resolve Another
-        </button>
-      </div>
-    );
-  }
-
-  return (
-    <div style={{ maxWidth: "500px" }}>
-      <p className="muted" style={{ marginBottom: "1.5rem" }}>
-        Pick the winning agent. USDC is released from Arc and bridged to the
-        winner&apos;s preferred chain via Circle Bridge Kit (CCTP).
-      </p>
-
-      <div style={{ marginBottom: "1rem" }}>
-        <label
-          className="muted"
-          style={{
-            display: "block",
-            marginBottom: "0.5rem",
-            fontSize: "0.9em",
-          }}
-        >
-          Bounty ID
-        </label>
-        <input
-          type="number"
-          placeholder="1"
-          value={bountyIdStr}
-          onChange={(e) => setBountyIdStr(e.target.value)}
-          disabled={step !== "form"}
-          min="1"
-        />
-      </div>
-      <div style={{ marginBottom: "1rem" }}>
-        <label
-          className="muted"
-          style={{
-            display: "block",
-            marginBottom: "0.5rem",
-            fontSize: "0.9em",
-          }}
-        >
-          Winner Address
-        </label>
-        <input
-          type="text"
-          placeholder="0x..."
-          value={winnerAddr}
-          onChange={(e) => setWinnerAddr(e.target.value)}
-          disabled={step !== "form"}
-        />
-      </div>
-      <div style={{ marginBottom: "1.5rem" }}>
-        <label
-          className="muted"
-          style={{
-            display: "block",
-            marginBottom: "0.5rem",
-            fontSize: "0.9em",
-          }}
-        >
-          Reputation Score (0-100)
-        </label>
-        <input
-          type="number"
-          placeholder="80"
-          value={score}
-          onChange={(e) => setScore(e.target.value)}
-          disabled={step !== "form"}
-          min="0"
-          max="100"
-        />
-      </div>
-
-      <button
-        onClick={handleResolve}
-        disabled={step !== "form" || !bountyIdStr || !winnerAddr}
-        style={{ width: "100%", marginBottom: "1.5rem" }}
-      >
-        {step === "resolving"
-          ? "Resolving on-chain..."
-          : step === "bridging"
-            ? `Bridging USDC${winnerPayoutChain ? ` to ${CHAIN_LABELS[winnerPayoutChain] || winnerPayoutChain}` : ""}...`
-            : "Resolve & Bridge Payout"}
-      </button>
-
-      {step !== "form" && (
-        <div
-          style={{ display: "flex", flexDirection: "column", gap: "0.5rem" }}
-        >
-          <StatusStep
-            label="Resolve on-chain"
-            done={step === "bridging"}
-            active={step === "resolving"}
-          />
-          <StatusStep
-            label="Read payout chain from ENS"
-            done={step === "bridging"}
-            active={step === "resolving"}
-          />
-          <StatusStep
-            label={`Bridge USDC → ${CHAIN_LABELS[winnerPayoutChain] || winnerPayoutChain || "destination"}`}
-            done={false}
-            active={step === "bridging"}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Status Step ────────────────────────────────────────────────────────────
-
-function StatusStep({
-  label,
-  done,
-  active,
-}: {
-  label: string;
-  done: boolean;
-  active: boolean;
-}) {
-  return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: "0.75rem",
-        fontSize: "0.9rem",
-        color: done ? "#16a34a" : active ? "#4c7dff" : "#9ca3af",
-      }}
-    >
-      <span
-        style={{
-          width: "16px",
-          height: "16px",
-          borderRadius: "50%",
-          background: done ? "#16a34a" : active ? "#4c7dff" : "#e5e7eb",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "center",
-          fontSize: "10px",
-          color: "#fff",
-        }}
-      >
-        {done ? "✓" : active ? "" : ""}
-      </span>
-      <span>{label}</span>
     </div>
   );
 }
