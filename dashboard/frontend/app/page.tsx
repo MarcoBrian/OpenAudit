@@ -6,6 +6,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
+const SHOW_NON_CHAT = process.env.NEXT_PUBLIC_SHOW_NON_CHAT === "true";
 
 type ProgressEvent = {
   step: string;
@@ -517,9 +518,9 @@ export default function Home() {
       </header>
 
       <div className="hero">
-        <div className="title">Run the agent</div>
+        <div className="title">Chat with OpenAudit agent</div>
         <div className="muted">
-          Submit a single Solidity file and track every step in real time.
+          Chat with the on-chain agent to list, analyze, and submit bounties.
         </div>
         {isRunning && <div className="shimmer" />}
       </div>
@@ -622,258 +623,262 @@ export default function Home() {
         </div>
       </div>
 
-      <div className="grid">
-        <div className="card">
-          <div className="section-title">Input</div>
-          <div className="row">
-            <div style={{ flex: 1 }}>
-              <label>Solidity File</label>
-              <div className="file-input">
-                <input
-                  id="solidity-file"
-                  type="file"
-                  accept=".sol"
-                  onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
-                />
-                <label htmlFor="solidity-file" className="file-button">
-                  Choose file
-                </label>
-                <span className="file-name">{fileName || "No file selected"}</span>
-              </div>
-            </div>
-          </div>
-          <div style={{ marginTop: 16 }}>
-            <button onClick={handleSubmit} disabled={!file || isRunning}>
-              {isRunning ? "Running..." : "Run Agent"}
-            </button>
-          </div>
-          <div className="badge-group" style={{ marginTop: 16 }}>
-            <div className="badge">{useGraph ? "Graph: ON" : "Graph: OFF"}</div>
-            <div className="badge">Max issues: {maxIssues}</div>
-          </div>
-          <details className="drawer">
-            <summary className="summary">Advanced settings</summary>
-            <div className="drawer-body">
-              <div className="row" style={{ marginTop: 12 }}>
-                <div style={{ flex: 1 }}>
-                  <label>Tools</label>
-                  <input
-                    type="text"
-                    value={tools}
-                    onChange={(event) => setTools(event.target.value)}
-                  />
-                </div>
-              </div>
-              <div className="row" style={{ marginTop: 12 }}>
-                <div style={{ flex: 1 }}>
-                  <label>Max issues</label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={10}
-                    value={maxIssues}
-                    onChange={(event) => setMaxIssues(Number(event.target.value))}
-                  />
-                </div>
-              </div>
-              <div className="row" style={{ marginTop: 12 }}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={useLlm}
-                    onChange={(event) => setUseLlm(event.target.checked)}
-                  />
-                  <span style={{ marginLeft: 8 }}>LLM triage + logic review</span>
-                </label>
-              </div>
+      {SHOW_NON_CHAT && (
+        <>
+          <div className="grid">
+            <div className="card">
+              <div className="section-title">Input</div>
               <div className="row">
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={useGraph}
-                    onChange={(event) => setUseGraph(event.target.checked)}
-                  />
-                  <span style={{ marginLeft: 8 }}>LangGraph workflow</span>
-                </label>
-              </div>
-            </div>
-          </details>
-          <div className="footer">
-            {jobId ? `Job ${jobId}` : "Upload a Solidity file to start."}
-          </div>
-        </div>
-
-        <div className="card">
-          <div className="section-title">Live progress</div>
-          <div className="muted" style={{ marginBottom: 12 }}>
-            {latestEvent?.message ?? "Waiting for updates."} · Elapsed{" "}
-            {formatDuration(elapsed)}
-          </div>
-          <div className="stepper">
-            {steps.map((step) => (
-              <div className="stepper-item" key={step.key}>
-                <div className={`stepper-dot ${stepStatus(step.key)}`} />
-                <div>
-                  <div className="stepper-label">{step.label}</div>
-                  <div className="muted" style={{ fontSize: 12 }}>
-                    {stepStatus(step.key)} · {formatDuration(stepDuration(step.key))}
+                <div style={{ flex: 1 }}>
+                  <label>Solidity File</label>
+                  <div className="file-input">
+                    <input
+                      id="solidity-file"
+                      type="file"
+                      accept=".sol"
+                      onChange={(event) => handleFileChange(event.target.files?.[0] ?? null)}
+                    />
+                    <label htmlFor="solidity-file" className="file-button">
+                      Choose file
+                    </label>
+                    <span className="file-name">{fileName || "No file selected"}</span>
                   </div>
                 </div>
               </div>
-            ))}
-          </div>
-          <ul className="progress-list">
-            {events.map((event, index) => (
-              <li key={`${event.step}-${event.timestamp}`} className="entered">
-                <div className="progress-step">
-                  <span className={`progress-dot ${event.status}`} />
-                  {event.status === "running" &&
-                    event.step !== "queued" &&
-                    !hasLaterTerminal(index, event.step) && (
-                    <span className="spinner" />
-                  )}
-                  <div>
-                    <strong>{event.step}</strong>
-                    <div className="muted" style={{ fontSize: 13 }}>
-                      {event.status}
-                      {event.message ? ` · ${event.message}` : ""}
+              <div style={{ marginTop: 16 }}>
+                <button onClick={handleSubmit} disabled={!file || isRunning}>
+                  {isRunning ? "Running..." : "Run Agent"}
+                </button>
+              </div>
+              <div className="badge-group" style={{ marginTop: 16 }}>
+                <div className="badge">{useGraph ? "Graph: ON" : "Graph: OFF"}</div>
+                <div className="badge">Max issues: {maxIssues}</div>
+              </div>
+              <details className="drawer">
+                <summary className="summary">Advanced settings</summary>
+                <div className="drawer-body">
+                  <div className="row" style={{ marginTop: 12 }}>
+                    <div style={{ flex: 1 }}>
+                      <label>Tools</label>
+                      <input
+                        type="text"
+                        value={tools}
+                        onChange={(event) => setTools(event.target.value)}
+                      />
                     </div>
                   </div>
+                  <div className="row" style={{ marginTop: 12 }}>
+                    <div style={{ flex: 1 }}>
+                      <label>Max issues</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={10}
+                        value={maxIssues}
+                        onChange={(event) => setMaxIssues(Number(event.target.value))}
+                      />
+                    </div>
+                  </div>
+                  <div className="row" style={{ marginTop: 12 }}>
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={useLlm}
+                        onChange={(event) => setUseLlm(event.target.checked)}
+                      />
+                      <span style={{ marginLeft: 8 }}>LLM triage + logic review</span>
+                    </label>
+                  </div>
+                  <div className="row">
+                    <label>
+                      <input
+                        type="checkbox"
+                        checked={useGraph}
+                        onChange={(event) => setUseGraph(event.target.checked)}
+                      />
+                      <span style={{ marginLeft: 8 }}>LangGraph workflow</span>
+                    </label>
+                  </div>
                 </div>
-              </li>
-            ))}
-          </ul>
-        </div>
-      </div>
+              </details>
+              <div className="footer">
+                {jobId ? `Job ${jobId}` : "Upload a Solidity file to start."}
+              </div>
+            </div>
 
-      <div className="card">
-        <div className="section-title">Top finding</div>
-        {submissionTitle ? (
-          <div className="top-finding">
+            <div className="card">
+              <div className="section-title">Live progress</div>
+              <div className="muted" style={{ marginBottom: 12 }}>
+                {latestEvent?.message ?? "Waiting for updates."} · Elapsed{" "}
+                {formatDuration(elapsed)}
+              </div>
+              <div className="stepper">
+                {steps.map((step) => (
+                  <div className="stepper-item" key={step.key}>
+                    <div className={`stepper-dot ${stepStatus(step.key)}`} />
+                    <div>
+                      <div className="stepper-label">{step.label}</div>
+                      <div className="muted" style={{ fontSize: 12 }}>
+                        {stepStatus(step.key)} · {formatDuration(stepDuration(step.key))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+              <ul className="progress-list">
+                {events.map((event, index) => (
+                  <li key={`${event.step}-${event.timestamp}`} className="entered">
+                    <div className="progress-step">
+                      <span className={`progress-dot ${event.status}`} />
+                      {event.status === "running" &&
+                        event.step !== "queued" &&
+                        !hasLaterTerminal(index, event.step) && (
+                        <span className="spinner" />
+                      )}
+                      <div>
+                        <strong>{event.step}</strong>
+                        <div className="muted" style={{ fontSize: 13 }}>
+                          {event.status}
+                          {event.message ? ` · ${event.message}` : ""}
+                        </div>
+                      </div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          </div>
+
+          <div className="card">
+            <div className="section-title">Top finding</div>
+            {submissionTitle ? (
+              <div className="top-finding">
+                <div className="badge-group" style={{ marginBottom: 12 }}>
+                  {submissionSeverity && (
+                    <div className={`badge ${severityClass(submissionSeverity)}`}>
+                      {submissionSeverity}
+                    </div>
+                  )}
+                  {typeof submissionConfidence === "number" && (
+                    <div className="badge">Confidence: {submissionConfidence.toFixed(2)}</div>
+                  )}
+                </div>
+                <div className="top-title">{submissionTitle}</div>
+                <div className="section-title" style={{ marginTop: 12 }}>
+                  Impact
+                </div>
+                <MarkdownBlock value={submissionImpact} />
+                <div className="section-title" style={{ marginTop: 12 }}>
+                  Description
+                </div>
+                <MarkdownBlock value={submissionDescription} />
+                <div className="section-title" style={{ marginTop: 12 }}>
+                  Remediation
+                </div>
+                <MarkdownBlock value={submissionRemediation} />
+                <div className="section-title" style={{ marginTop: 12 }}>
+                  Repro
+                </div>
+                <MarkdownBlock value={submissionRepro} />
+              </div>
+            ) : (
+              <div className="muted">No top finding yet.</div>
+            )}
+          </div>
+
+          <div className="grid">
+            <div className="card">
+              <div className="section-title">Submission JSON</div>
             <div className="badge-group" style={{ marginBottom: 12 }}>
               {submissionSeverity && (
                 <div className={`badge ${severityClass(submissionSeverity)}`}>
-                  {submissionSeverity}
+                  Severity: {submissionSeverity}
                 </div>
               )}
               {typeof submissionConfidence === "number" && (
                 <div className="badge">Confidence: {submissionConfidence.toFixed(2)}</div>
               )}
             </div>
-            <div className="top-title">{submissionTitle}</div>
-            <div className="section-title" style={{ marginTop: 12 }}>
-              Impact
+            {submission ? (
+              <div className="json-viewer">{renderJson(submission as JsonValue)}</div>
+            ) : (
+              <div className="callout">
+                <div className="callout-title">No submission yet</div>
+                <div className="muted">
+                  Run the agent to generate a structured security report.
+                </div>
+              </div>
+            )}
+            {error && (
+              <>
+                <div className="badge" style={{ marginTop: 12 }}>
+                  Error
+                </div>
+                <pre>{error}</pre>
+              </>
+            )}
             </div>
-            <MarkdownBlock value={submissionImpact} />
-            <div className="section-title" style={{ marginTop: 12 }}>
-              Description
-            </div>
-            <MarkdownBlock value={submissionDescription} />
-            <div className="section-title" style={{ marginTop: 12 }}>
-              Remediation
-            </div>
-            <MarkdownBlock value={submissionRemediation} />
-            <div className="section-title" style={{ marginTop: 12 }}>
-              Repro
-            </div>
-            <MarkdownBlock value={submissionRepro} />
-          </div>
-        ) : (
-          <div className="muted">No top finding yet.</div>
-        )}
-      </div>
 
-      <div className="grid">
-        <div className="card">
-          <div className="section-title">Submission JSON</div>
-        <div className="badge-group" style={{ marginBottom: 12 }}>
-          {submissionSeverity && (
-            <div className={`badge ${severityClass(submissionSeverity)}`}>
-              Severity: {submissionSeverity}
-            </div>
-          )}
-          {typeof submissionConfidence === "number" && (
-            <div className="badge">Confidence: {submissionConfidence.toFixed(2)}</div>
-          )}
-        </div>
-        {submission ? (
-          <div className="json-viewer">{renderJson(submission as JsonValue)}</div>
-        ) : (
-          <div className="callout">
-            <div className="callout-title">No submission yet</div>
-            <div className="muted">
-              Run the agent to generate a structured security report.
-            </div>
-          </div>
-        )}
-        {error && (
-          <>
-            <div className="badge" style={{ marginTop: 12 }}>
-              Error
-            </div>
-            <pre>{error}</pre>
-          </>
-        )}
-        </div>
-
-        <div className="card">
-          <div className="section-title">Artifacts</div>
-          {artifacts.length ? (
-            <div className="artifact-list">
-              {artifacts.map((name) => (
-                <button
-                  key={name}
-                  className="secondary"
-                  onClick={() => downloadArtifact(name)}
-                >
-                  Download {name}
-                </button>
-              ))}
-            </div>
-          ) : (
-            <div className="muted">Artifacts appear after a run completes.</div>
-          )}
-          <div className="section-title" style={{ marginTop: 18 }}>
-            Run history
-          </div>
-          {history.length ? (
-            <div className="history-list">
-              {history.map((run) => (
-                <div key={run.id} className="history-item">
-                  <div>
-                    <div className="history-title">{run.fileName}</div>
-                    <div className="muted" style={{ fontSize: 12 }}>
-                      {new Date(run.createdAt).toLocaleString()}
+            <div className="card">
+              <div className="section-title">Artifacts</div>
+              {artifacts.length ? (
+                <div className="artifact-list">
+                  {artifacts.map((name) => (
+                    <button
+                      key={name}
+                      className="secondary"
+                      onClick={() => downloadArtifact(name)}
+                    >
+                      Download {name}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="muted">Artifacts appear after a run completes.</div>
+              )}
+              <div className="section-title" style={{ marginTop: 18 }}>
+                Run history
+              </div>
+              {history.length ? (
+                <div className="history-list">
+                  {history.map((run) => (
+                    <div key={run.id} className="history-item">
+                      <div>
+                        <div className="history-title">{run.fileName}</div>
+                        <div className="muted" style={{ fontSize: 12 }}>
+                          {new Date(run.createdAt).toLocaleString()}
+                        </div>
+                      </div>
+                      <div className="badge">{run.status}</div>
                     </div>
-                  </div>
-                  <div className="badge">{run.status}</div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="muted">No runs yet.</div>
-          )}
-        </div>
-      </div>
-
-      <div className="card">
-        <div className="section-title">Contract preview</div>
-        {contractText ? (
-          <div className="code-viewer">
-            <div className="code-header">{fileName}</div>
-            <div className="code-body">
-              {contractText.split("\n").map((line, index) => (
-                <div key={`${index}-${line}`} className="code-line">
-                  <span className="code-line-number">{index + 1}</span>
-                  <span className="code-line-text">{line || " "}</span>
-                </div>
-              ))}
+              ) : (
+                <div className="muted">No runs yet.</div>
+              )}
             </div>
           </div>
-        ) : (
-          <div className="muted">Upload a file to preview the contract.</div>
-        )}
-      </div>
+
+          <div className="card">
+            <div className="section-title">Contract preview</div>
+            {contractText ? (
+              <div className="code-viewer">
+                <div className="code-header">{fileName}</div>
+                <div className="code-body">
+                  {contractText.split("\n").map((line, index) => (
+                    <div key={`${index}-${line}`} className="code-line">
+                      <span className="code-line-number">{index + 1}</span>
+                      <span className="code-line-text">{line || " "}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="muted">Upload a file to preview the contract.</div>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
