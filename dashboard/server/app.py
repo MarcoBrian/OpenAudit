@@ -27,6 +27,8 @@ from agents import langchain_agent as lc_agent
 # Local modules
 from dashboard.server.pinata import PinataError, gateway_url, pin_json
 from dashboard.server import registry
+from dashboard.server import web3_client
+from dashboard.server.bridge_client import BridgeClient, BridgeError
 
 logger = logging.getLogger(__name__)
 
@@ -552,3 +554,192 @@ async def pin_report(request: Request) -> JSONResponse:
         return JSONResponse({"cid": cid, "gateway_url": gw_url})
     except PinataError as exc:
         return JSONResponse({"error": str(exc)}, status_code=502)
+
+
+# ---------------------------------------------------------------------------
+# Bounty & Agent endpoints (on-chain reads via web3)
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/bounties")
+def list_bounties(limit: int = 50) -> JSONResponse:
+    """List all bounties from the OpenAuditRegistry contract."""
+    try:
+        bounties = web3_client.list_bounties(limit=limit)
+        return JSONResponse({"bounties": bounties})
+    except Exception as exc:
+        logger.warning("Failed to list bounties: %s", exc)
+        return JSONResponse({"error": str(exc), "bounties": []}, status_code=500)
+
+
+@app.get("/api/agents")
+def list_agents(limit: int = 50) -> JSONResponse:
+    """List all registered agents with their payout chain preferences."""
+    try:
+        agents = web3_client.list_agents(limit=limit)
+        return JSONResponse({"agents": agents})
+    except Exception as exc:
+        logger.warning("Failed to list agents: %s", exc)
+        return JSONResponse({"error": str(exc), "agents": []}, status_code=500)
+
+
+@app.get("/api/agents/{name}/payout-chain")
+def get_payout_chain(name: str) -> JSONResponse:
+    """Read an agent's preferred payout chain from their ENS text record."""
+    try:
+        chain = web3_client.get_agent_payout_chain(name)
+        if chain is None:
+            return JSONResponse({"error": "Agent not found"}, status_code=404)
+        return JSONResponse({"name": name, "payout_chain": chain})
+    except Exception as exc:
+        logger.warning("Failed to get payout chain for %s: %s", name, exc)
+        return JSONResponse({"error": str(exc)}, status_code=500)
+
+
+# ---------------------------------------------------------------------------
+# Bridge endpoint (Circle Bridge Kit / CCTP)
+# ---------------------------------------------------------------------------
+
+# Chain name → CCTP domain ID mapping (testnet)
+CCTP_DOMAINS = {
+    "Arc_Testnet": 26,
+    "Base_Sepolia": 6,
+    "Ethereum_Sepolia": 0,
+    "Arbitrum_Sepolia": 3,
+}
+
+# Bridge client instance (talks to the Node.js Bridge Kit service)
+_bridge_client = BridgeClient()
+
+# In-memory bridge status tracker (use a DB in production)
+_bridge_status: Dict[str, Dict[str, Any]] = {}
+
+
+@app.post("/api/bridge/execute")
+async def execute_bridge(request: Request) -> JSONResponse:
+    """Execute a cross-chain USDC bridge via Circle Bridge Kit / CCTP.
+
+    The relay wallet holds USDC on Base Sepolia after bounty resolution.
+    This endpoint bridges that USDC to the winner's preferred chain.
+
+    Request body:
+        amount: str — USDC amount (e.g. "1000.00")
+        recipient: str — destination address
+        destination_chain: str — Bridge Kit chain name (e.g. "Base_Sepolia", "Ethereum_Sepolia")
+            or ENS payout_chain value (e.g. "ethereum", "arbitrum")
+    """
+    body = await request.json()
+    amount = body.get("amount", "0")
+    recipient = body.get("recipient", "")
+    dest_chain = body.get("destination_chain", "")
+
+    if not recipient or not dest_chain:
+        return JSONResponse(
+            {"error": "Missing recipient or destination_chain"}, status_code=400
+        )
+
+    try:
+        result = await _bridge_client.bridge(
+            amount=amount,
+            recipient=recipient,
+            destination_chain=dest_chain,
+        )
+        bridge_id = result.get("bridge_id", "")
+        _bridge_status[bridge_id] = result
+        return JSONResponse(result)
+    except BridgeError as exc:
+        logger.warning("Bridge failed: %s", exc)
+        return JSONResponse({"error": str(exc)}, status_code=502)
+    except Exception as exc:
+        logger.warning("Bridge service unavailable: %s", exc)
+        # Fallback: record the intent for later processing
+        bridge_id = uuid.uuid4().hex
+        _bridge_status[bridge_id] = {
+            "status": "pending",
+            "amount": amount,
+            "dest_chain": dest_chain,
+            "recipient": recipient,
+            "error": f"Bridge service unavailable: {exc}",
+        }
+        return JSONResponse({
+            "bridge_id": bridge_id,
+            "status": "pending",
+            "error": f"Bridge service unavailable, queued for retry: {exc}",
+            "amount": amount,
+            "destination_chain": dest_chain,
+        }, status_code=202)
+
+
+@app.post("/api/bridge/settle")
+async def settle_bounty_bridge(request: Request) -> JSONResponse:
+    """Process a bounty settlement — reads ENS payout chain + bridges USDC.
+
+    This is the primary endpoint called after bounty resolution. It:
+    1. Reads the winner's preferred chain from their ENS subname text record
+    2. Bridges USDC from Base Sepolia → destination chain via Circle Bridge Kit
+
+    Request body:
+        bounty_id: str — The resolved bounty ID
+        winner: str — Winner's address
+        reward_usdc: str — USDC amount (e.g. "100.00")
+        payout_chain: str (optional) — Override destination chain
+    """
+    body = await request.json()
+    bounty_id = body.get("bounty_id", "")
+    winner = body.get("winner", "")
+    reward_usdc = body.get("reward_usdc", "")
+    payout_chain = body.get("payout_chain")
+
+    if not bounty_id or not winner or not reward_usdc:
+        return JSONResponse(
+            {"error": "Missing required fields: bounty_id, winner, reward_usdc"},
+            status_code=400,
+        )
+
+    try:
+        result = await _bridge_client.settle(
+            bounty_id=str(bounty_id),
+            winner=winner,
+            reward_usdc=str(reward_usdc),
+            payout_chain=payout_chain,
+        )
+        return JSONResponse(result)
+    except BridgeError as exc:
+        logger.warning("Settlement bridge failed: %s", exc)
+        return JSONResponse({"error": str(exc)}, status_code=502)
+    except Exception as exc:
+        logger.warning("Bridge service unavailable for settlement: %s", exc)
+        return JSONResponse({
+            "error": f"Bridge service unavailable: {exc}",
+            "bounty_id": bounty_id,
+            "winner": winner,
+            "reward_usdc": reward_usdc,
+        }, status_code=202)
+
+
+@app.get("/api/bridge/chains")
+async def list_bridge_chains() -> JSONResponse:
+    """List supported destination chains for USDC bridging."""
+    try:
+        chains = await _bridge_client.list_chains()
+        return JSONResponse({"source_chain": "Base_Sepolia", "destinations": chains})
+    except Exception:
+        # Fallback: return static list
+        return JSONResponse({
+            "source_chain": "Base_Sepolia",
+            "destinations": [
+                {"value": "base", "label": "Base Sepolia (same chain)"},
+                {"value": "arc", "label": "Arc Testnet"},
+                {"value": "ethereum", "label": "Ethereum Sepolia"},
+                {"value": "arbitrum", "label": "Arbitrum Sepolia"},
+            ],
+        })
+
+
+@app.get("/api/bridge/status/{bridge_id}")
+def get_bridge_status(bridge_id: str) -> JSONResponse:
+    """Check the status of a cross-chain bridge operation."""
+    status = _bridge_status.get(bridge_id)
+    if not status:
+        return JSONResponse({"error": "Bridge not found"}, status_code=404)
+    return JSONResponse(status)

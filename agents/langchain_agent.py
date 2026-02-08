@@ -509,9 +509,19 @@ REGISTRY_ABI: list[dict[str, Any]] = [
         "type": "event",
     },
     {
+        "anonymous": False,
+        "inputs": [
+            {"indexed": True, "internalType": "uint256", "name": "agentId", "type": "uint256"},
+            {"indexed": False, "internalType": "string", "name": "chain", "type": "string"},
+        ],
+        "name": "PayoutChainUpdated",
+        "type": "event",
+    },
+    {
         "inputs": [
             {"internalType": "string", "name": "name", "type": "string"},
             {"internalType": "string", "name": "metadataURI", "type": "string"},
+            {"internalType": "string", "name": "payoutChain", "type": "string"},
         ],
         "name": "registerAgent",
         "outputs": [
@@ -519,6 +529,23 @@ REGISTRY_ABI: list[dict[str, Any]] = [
             {"internalType": "address", "name": "tba", "type": "address"},
         ],
         "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [
+            {"internalType": "uint256", "name": "agentId", "type": "uint256"},
+            {"internalType": "string", "name": "chain", "type": "string"},
+        ],
+        "name": "setPayoutChain",
+        "outputs": [],
+        "stateMutability": "nonpayable",
+        "type": "function",
+    },
+    {
+        "inputs": [{"internalType": "uint256", "name": "agentId", "type": "uint256"}],
+        "name": "getPayoutChain",
+        "outputs": [{"internalType": "string", "name": "", "type": "string"}],
+        "stateMutability": "view",
         "type": "function",
     },
     {
@@ -1145,6 +1172,7 @@ def _register_agent_impl(
     metadata_uri: Optional[str] = None,
     agent_name: Optional[str] = None,
     initial_operator: Optional[str] = None,
+    payout_chain: Optional[str] = None,
 ) -> str:
     """
     REGISTER THIS AGENT in the on-chain OpenAuditRegistry. Use this tool when the user asks to:
@@ -1161,6 +1189,10 @@ def _register_agent_impl(
     - metadata_uri: IPFS URI for agent metadata (default: "ipfs://test-agent-metadata")
     - agent_name: Name for the agent, will become {agent_name}.openaudit.eth (default: "agent-local-test")
     - initial_operator: (legacy) ignored by OpenAuditRegistry; kept for backward compatibility
+    - payout_chain: Preferred chain for USDC bounty payouts (e.g., "base", "ethereum", "arbitrum", "arc").
+                    Stored as an ENS text record "payout_chain" on the agent's subdomain.
+                    Used by the settlement system to bridge USDC to the agent's preferred network.
+                    Defaults to "arc" if not specified.
 
     If no parameters are provided, sensible test defaults are used for local Anvil.
 
@@ -1169,7 +1201,7 @@ def _register_agent_impl(
     - OPENAUDIT_WALLET_RPC_URL: RPC URL for the target network (REQUIRED)
     - OPENAUDIT_REGISTRY_ADDRESS: OpenAuditRegistry contract address (REQUIRED)
 
-    Returns JSON with status, agent_id, tba address, and transaction hash.
+    Returns JSON with status, agent_id, tba address, payout_chain, and transaction hash.
     """
     if Web3 is None:
         raise AgentRuntimeError(
@@ -1184,6 +1216,7 @@ def _register_agent_impl(
         metadata_uri = payload.get("metadata_uri")
         agent_name = payload.get("agent_name")
         initial_operator = payload.get("initial_operator")
+        payout_chain = payload.get("payout_chain") or payout_chain
 
     private_key = os.getenv("OPENAUDIT_WALLET_PRIVATE_KEY")
     rpc_url = _get_rpc_url()
@@ -1219,6 +1252,7 @@ def _register_agent_impl(
     # Defaults for local testing
     metadata_uri = metadata_uri or "ipfs://test-agent-metadata"
     agent_name = agent_name or "agent-local-test"
+    payout_chain = payout_chain or "arc"
     if initial_operator:
         # OpenAuditRegistry does not accept initial_operator; keep for backward compatibility.
         pass
@@ -1228,6 +1262,7 @@ def _register_agent_impl(
         tx = contract.functions.registerAgent(
             agent_name,
             metadata_uri,
+            payout_chain,
         ).build_transaction(
             {
                 "from": account.address,
@@ -1287,6 +1322,7 @@ def _register_agent_impl(
                 "tx_hash": tx_hash.hex(),
                 "agent_name": agent_name,
                 "metadata_uri": metadata_uri,
+                "payout_chain": payout_chain,
                 "owner": account.address,
                 "agent_id": agent_id_int,
                 "tba": tba_addr,
@@ -1313,6 +1349,7 @@ else:
         metadata_uri: Optional[str] = None,
         agent_name: Optional[str] = None,
         initial_operator: Optional[str] = None,
+        payout_chain: Optional[str] = None,
     ) -> str:
         """
         REGISTER THIS AGENT in the on-chain OpenAuditRegistry. Use this tool when the user asks to:
@@ -1329,6 +1366,8 @@ else:
         - metadata_uri: IPFS URI for agent metadata (default: "ipfs://test-agent-metadata")
         - agent_name: Name for the agent, will become {agent_name}.openaudit.eth (default: "agent-local-test")
         - initial_operator: (legacy) ignored by OpenAuditRegistry; kept for compatibility
+        - payout_chain: Preferred chain for USDC bounty payouts (e.g., "base", "ethereum", "arbitrum", "arc").
+                        Stored as ENS text record. Defaults to "arc".
 
         If no parameters are provided, sensible test defaults are used for local Anvil.
 
@@ -1337,12 +1376,13 @@ else:
         - OPENAUDIT_WALLET_RPC_URL: RPC URL for the target network (REQUIRED)
         - OPENAUDIT_REGISTRY_ADDRESS: OpenAuditRegistry contract address (REQUIRED)
 
-        Returns JSON with status, agent_id, tba address, and transaction hash.
+        Returns JSON with status, agent_id, tba address, payout_chain, and transaction hash.
         """
         return _register_agent_impl(
             metadata_uri=metadata_uri,
             agent_name=agent_name,
             initial_operator=initial_operator,
+            payout_chain=payout_chain,
         )
 
 
@@ -2067,8 +2107,10 @@ def _build_prompt(system_prompt: str | None = None) -> ChatPromptTemplate:
         "CRITICAL: When a user asks to register the agent, you MUST call the register_agent tool. "
         "Do not just explain - actually execute the registration.\n\n"
         "Tool input formats:\n"
-        "- register_agent: JSON with optional metadata_uri, agent_name (initial_operator ignored if provided)\n"
+        "- register_agent: JSON with optional metadata_uri, agent_name, payout_chain (initial_operator ignored if provided)\n"
         "- check_registration: JSON with optional agent_name, agent_id, or tba_address\n"
+        "- set_payout_chain: JSON with payout_chain (required), optional agent_name or agent_id\n"
+        "- get_payout_chain: JSON with optional agent_name or agent_id\n"
         "- run_audit: JSON with file (required), tools, max_issues, use_llm, dump_intermediate, reports_dir\n\n"
         "- list_bounties: JSON with optional limit, rpc_url, registry_address\n"
         "- analyze_bounty: JSON with bounty_id (required), tools, max_issues, use_llm, dump_intermediate, "
@@ -2262,7 +2304,7 @@ def run_chat_mode(agent_executor: Any, system_prompt: str | None = None) -> int:
                     continue
 
                 if action == "register_agent":
-                    allowed = {"metadata_uri", "agent_name", "initial_operator"}
+                    allowed = {"metadata_uri", "agent_name", "initial_operator", "payout_chain"}
                     params = {key: value for key, value in params.items() if key in allowed}
                     if "agent_name" not in params:
                         candidate = _extract_register_agent_name(user_input)
