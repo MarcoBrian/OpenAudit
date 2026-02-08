@@ -2,7 +2,7 @@
 web3_client.py — Read-only contract interactions for the dashboard backend.
 
 Provides helpers to read bounties, agents, and ENS text records from
-the OpenAuditRegistry deployed on Arc.
+the OpenAuditRegistry deployed on Base Sepolia.
 """
 
 from __future__ import annotations
@@ -50,9 +50,9 @@ def _get_web3():
     except ImportError:
         raise RuntimeError("web3 package not installed. pip install web3")
 
-    rpc_url = os.getenv("ARC_TESTNET_RPC_URL") or os.getenv("RPC_URL", "")
+    rpc_url = os.getenv("BASE_SEPOLIA_RPC_URL") or os.getenv("RPC_URL") or os.getenv("ARC_TESTNET_RPC_URL", "")
     if not rpc_url:
-        raise RuntimeError("ARC_TESTNET_RPC_URL or RPC_URL not set")
+        raise RuntimeError("BASE_SEPOLIA_RPC_URL or RPC_URL not set")
 
     return Web3(Web3.HTTPProvider(rpc_url))
 

@@ -12,7 +12,7 @@ import "../src/mocks/MockERC20.sol";
  * @title DeployOpenAudit
  * @notice Deploy OpenAuditRegistry with ERC-6551 + ENS infrastructure
  *
- *   forge script script/DeployRegistry.s.sol:DeployOpenAudit --rpc-url $RPC_URL --broadcast
+ *   forge script script/DeployRegistry.s.sol:DeployOpenAudit --rpc-url base-sepolia --broadcast
  */
 contract DeployOpenAudit is Script {
     function run() external {
