@@ -31,6 +31,24 @@ type RunHistory = {
   createdAt: string;
 };
 
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+};
+
+type ChatMeta = {
+  action?: string;
+  durationMs?: number;
+};
+
+type AgentProgressEvent = {
+  step: string;
+  status: string;
+  message?: string;
+  timestamp?: string;
+};
+
 const severityClass = (value?: string) => {
   if (!value) return "";
   const normalized = value.toLowerCase();
@@ -118,6 +136,22 @@ const parseTimestamp = (value?: string) => {
   return date.getTime();
 };
 
+const parseJsonMessage = (value: string): JsonValue | null => {
+  if (!value) return null;
+  let cleaned = value.trim();
+  if (cleaned.startsWith("```")) {
+    cleaned = cleaned.replace(/^```[a-zA-Z]*\n?/, "").replace(/```$/, "").trim();
+  }
+  if (!(cleaned.startsWith("{") || cleaned.startsWith("["))) {
+    return null;
+  }
+  try {
+    return JSON.parse(cleaned) as JsonValue;
+  } catch {
+    return null;
+  }
+};
+
 const formatDuration = (ms: number | null) => {
   if (!ms || ms < 0) return "—";
   const seconds = Math.round(ms / 1000);
@@ -151,6 +185,14 @@ export default function Home() {
   const [isRunning, setIsRunning] = useState(false);
   const [artifacts, setArtifacts] = useState<string[]>([]);
   const [history, setHistory] = useState<RunHistory[]>([]);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatLoading, setChatLoading] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [chatSessionId, setChatSessionId] = useState<string | null>(null);
+  const [chatHint, setChatHint] = useState<string | null>(null);
+  const [chatMeta, setChatMeta] = useState<ChatMeta | null>(null);
+  const [chatEvents, setChatEvents] = useState<AgentProgressEvent[]>([]);
 
   useEffect(() => {
     const stored = localStorage.getItem("openaudit.history");
@@ -161,11 +203,53 @@ export default function Home() {
         setHistory([]);
       }
     }
+    const storedSession = localStorage.getItem("openaudit.agent.session_id");
+    if (storedSession) {
+      setChatSessionId(storedSession);
+    }
+    const storedChat = localStorage.getItem("openaudit.agent.history");
+    if (storedChat) {
+      try {
+        setChatMessages(JSON.parse(storedChat) as ChatMessage[]);
+      } catch {
+        setChatMessages([]);
+      }
+    }
   }, []);
 
   useEffect(() => {
     localStorage.setItem("openaudit.history", JSON.stringify(history));
   }, [history]);
+
+  useEffect(() => {
+    if (chatSessionId) {
+      localStorage.setItem("openaudit.agent.session_id", chatSessionId);
+    }
+  }, [chatSessionId]);
+
+  useEffect(() => {
+    localStorage.setItem("openaudit.agent.history", JSON.stringify(chatMessages));
+  }, [chatMessages]);
+
+  useEffect(() => {
+    if (!chatLoading || !chatSessionId) return;
+    let active = true;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/api/agent/sessions/${chatSessionId}/events`);
+        if (!res.ok) return;
+        const payload = await res.json();
+        if (!active) return;
+        setChatEvents(payload.events ?? []);
+      } catch {
+        // Ignore polling errors while loading
+      }
+    }, 1000);
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [chatLoading, chatSessionId]);
 
   useEffect(() => {
     if (!jobId) {
@@ -234,6 +318,92 @@ export default function Home() {
       { id: payload.job_id, fileName: file.name, status: "running", createdAt: new Date().toISOString() },
       ...prev
     ].slice(0, 10));
+  };
+
+  const handleChatSend = async () => {
+    const trimmed = chatInput.trim();
+    if (!trimmed || chatLoading) return;
+    setChatLoading(true);
+    setChatError(null);
+    setChatMeta(null);
+    setChatEvents([]);
+
+    const longRunning =
+      /analy(?:ze|se)\s+bounty|analyze_bounty|run_audit|audit|slither|aderyn/i.test(trimmed);
+    if (longRunning) {
+      setChatHint("This can take a few minutes. The agent is running static analysis + LLM triage.");
+    } else {
+      setChatHint("Thinking…");
+    }
+
+    let activeSessionId = chatSessionId;
+    if (!activeSessionId) {
+      activeSessionId = crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+      setChatSessionId(activeSessionId);
+    }
+
+    const userMessage: ChatMessage = {
+      id: `${Date.now()}-user`,
+      role: "user",
+      content: trimmed
+    };
+    setChatMessages((prev) => [...prev, userMessage]);
+    setChatInput("");
+
+    try {
+      const res = await fetch(`${API_BASE}/api/agent/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: trimmed,
+          session_id: activeSessionId ?? undefined
+        })
+      });
+      const payload = await res.json();
+      if (!res.ok) {
+        throw new Error(payload?.error || "Chat request failed");
+      }
+      if (payload.session_id) {
+        setChatSessionId(payload.session_id);
+      }
+      if (Array.isArray(payload.history)) {
+        const mapped = payload.history
+          .filter((item: { role?: string; content?: string }) =>
+            item?.role === "user" || item?.role === "assistant"
+          )
+          .map((item: { role?: string; content?: string }, idx: number) => ({
+            id: `${payload.session_id || "session"}-${idx}`,
+            role: item.role as "user" | "assistant",
+            content: item.content || ""
+          }));
+        setChatMessages(mapped);
+      } else if (payload.response) {
+        const assistantMessage: ChatMessage = {
+          id: `${Date.now()}-assistant`,
+          role: "assistant",
+          content: String(payload.response)
+        };
+        setChatMessages((prev) => [...prev, assistantMessage]);
+      }
+      if (payload.duration_ms || payload.action) {
+        setChatMeta({
+          action: payload.action,
+          durationMs: typeof payload.duration_ms === "number" ? payload.duration_ms : undefined
+        });
+      }
+    } catch (err) {
+      setChatError(err instanceof Error ? err.message : "Unknown error");
+    } finally {
+      setChatLoading(false);
+      setChatHint(null);
+    }
+  };
+
+  const handleChatKey = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      handleChatSend();
+    }
   };
 
   useEffect(() => {
@@ -352,6 +522,104 @@ export default function Home() {
           Submit a single Solidity file and track every step in real time.
         </div>
         {isRunning && <div className="shimmer" />}
+      </div>
+
+      <div className="card chat-card">
+        <div className="section-title">Agent chat</div>
+        <div className="muted" style={{ marginBottom: 12 }}>
+          Talk to the on-chain agent to list, analyze, pin, and submit bounties.
+        </div>
+        <div className="chat-shell">
+          <div className="chat-log">
+            {chatMessages.length ? (
+              chatMessages.map((msg) => (
+                <div key={msg.id} className={`chat-message ${msg.role}`}>
+                  <div className="chat-role">{msg.role}</div>
+                  {msg.role === "assistant" ? (
+                    (() => {
+                      const parsed = parseJsonMessage(msg.content);
+                      if (parsed) {
+                        return (
+                          <div className="chat-content chat-json">
+                            <div className="chat-json-title">Structured result</div>
+                            <div className="json-viewer">{renderJson(parsed)}</div>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="chat-content markdown">
+                          <ReactMarkdown remarkPlugins={[remarkGfm]}>{msg.content}</ReactMarkdown>
+                        </div>
+                      );
+                    })()
+                  ) : (
+                    <div className="chat-content">{msg.content}</div>
+                  )}
+                </div>
+              ))
+            ) : (
+              <div className="chat-empty">
+                <div className="muted">No messages yet.</div>
+                <div className="chat-hints">
+                  <span>Try:</span>
+                  <code>list_bounties limit=5</code>
+                  <code>analyze_bounty bounty_id=1</code>
+                  <code>pin_submission submission_path=submission.json</code>
+                </div>
+              </div>
+            )}
+            {chatLoading && (
+              <div className="chat-message assistant chat-loading">
+                <div className="chat-role">assistant</div>
+                <div className="chat-content">
+                  <span className="typing">
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                    <span className="typing-dot" />
+                  </span>
+                  <span className="typing-label">Thinking…</span>
+                  {chatEvents.length > 0 && (
+                    <div className="chat-status">
+                      <span className={`progress-dot ${chatEvents[chatEvents.length - 1].status}`} />
+                      <span className="muted">
+                        {chatEvents[chatEvents.length - 1].step} · {chatEvents[chatEvents.length - 1].status}
+                        {chatEvents[chatEvents.length - 1].message
+                          ? ` · ${chatEvents[chatEvents.length - 1].message}`
+                          : ""}
+                      </span>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+          </div>
+          <div className="chat-input-row">
+            <textarea
+              placeholder="Message the agent... (Enter to send, Shift+Enter for newline)"
+              value={chatInput}
+              onChange={(event) => setChatInput(event.target.value)}
+              onKeyDown={handleChatKey}
+              rows={2}
+            />
+            <button onClick={handleChatSend} disabled={chatLoading || !chatInput.trim()}>
+              {chatLoading ? "Sending..." : "Send"}
+            </button>
+          </div>
+          {chatError && <div className="chat-error">{chatError}</div>}
+          {chatHint && <div className="chat-hint">{chatHint}</div>}
+          {chatSessionId && (
+            <div className="chat-meta muted">
+              Session: {chatSessionId}
+              {chatMeta?.durationMs !== undefined && (
+                <>
+                  {" "}
+                  · Last response: {(chatMeta.durationMs / 1000).toFixed(1)}s
+                </>
+              )}
+              {chatMeta?.action && <> · Action: {chatMeta.action}</>}
+            </div>
+          )}
+        </div>
       </div>
 
       <div className="grid">

@@ -60,7 +60,10 @@ class BountySubmissionClient:
             }
         )
         signed = account.sign_transaction(tx)
-        tx_hash = self.web3.eth.send_raw_transaction(signed.rawTransaction)
+        raw_tx = getattr(signed, "raw_transaction", None) or getattr(signed, "rawTransaction", None)
+        if raw_tx is None:
+            raise AttributeError("SignedTransaction missing raw transaction bytes")
+        tx_hash = self.web3.eth.send_raw_transaction(raw_tx)
         return tx_hash.hex()
 
 

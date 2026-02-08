@@ -301,10 +301,18 @@ def _extract_json_payload(text: str) -> Dict[str, Any]:
 
 def _parse_key_value_args(text: str) -> Dict[str, str]:
     params: Dict[str, str] = {}
+    pattern = re.compile(r"(\\w+)\\s*(?:=|:)\\s*([^\\s,]+)")
+    for key, value in pattern.findall(text):
+        key = key.strip()
+        if key in params:
+            continue
+        params[key] = value.strip().strip("`\"',")
+    if params:
+        return params
     for token in text.split():
         if "=" in token:
             key, value = token.split("=", 1)
-            params[key.strip()] = value.strip().strip("`\"'")
+            params[key.strip()] = value.strip().strip("`\"',")
     return params
 
 
@@ -399,7 +407,7 @@ def _extract_report_cid(text: str) -> Optional[str]:
     if not raw:
         return None
     # Best-effort CID detection (supports common IPFS multibase prefixes)
-    match = re.search(r"\b(Qm[1-9A-HJ-NP-Za-km-z]{10,}|bafy[0-9a-z]{10,})\b", raw)
+    match = re.search(r"\b(Qm[1-9A-HJ-NP-Za-km-z]{10,}|bafy[0-9a-z]{10,}|bafk[0-9a-z]{10,})\b", raw)
     if match:
         return match.group(1)
     return None
@@ -727,11 +735,11 @@ def _detect_action_intent(text: str) -> Optional[ActionIntent]:
         return {"action": "analyze_bounty", "params": params}
 
     if explicit_submit or _contains_any(cleaned, _BOUNTY_SUBMIT_PHRASES):
-        if "bounty_id" not in params:
+        if not params.get("bounty_id"):
             bounty_id = _extract_bounty_id(text)
             if bounty_id is not None:
                 params["bounty_id"] = bounty_id
-        if "report_cid" not in params:
+        if not params.get("report_cid"):
             report_cid = _extract_report_cid(text)
             if report_cid:
                 params["report_cid"] = report_cid
@@ -1721,6 +1729,9 @@ def _analyze_bounty_impl(
         use_etherscan = payload.get("use_etherscan", use_etherscan)
         source_map = payload.get("source_map") or source_map
 
+    if isinstance(bounty_id, str):
+        match = re.search(r"(\\d+)", bounty_id)
+        bounty_id = match.group(1) if match else bounty_id
     try:
         bounty_id_int = int(bounty_id)
     except (TypeError, ValueError):
@@ -2155,6 +2166,14 @@ def create_agent_executor(
                 "LangChain agent creation functions are unavailable. "
                 "Install compatible LangChain version."
             )
+        max_iterations = _coerce_int(
+            os.getenv("OPENAUDIT_AGENT_MAX_ITERATIONS"),
+            10,
+        )
+        max_execution_time = _coerce_int(
+            os.getenv("OPENAUDIT_AGENT_MAX_EXECUTION_TIME"),
+            120,
+        )
         prompt = _build_prompt(system_prompt)
         agent = create_react_agent(llm, tools, prompt)
         executor = AgentExecutor(
@@ -2162,8 +2181,8 @@ def create_agent_executor(
             tools=tools,
             verbose=verbose,
             handle_parsing_errors=True,
-            max_iterations=10,  # Increased to allow tool calls
-            max_execution_time=120,  # Increased timeout
+            max_iterations=max_iterations,
+            max_execution_time=max_execution_time,
             early_stopping_method="force",
             return_intermediate_steps=True,  # Return intermediate steps for debugging
         )
@@ -2324,11 +2343,15 @@ def run_chat_mode(agent_executor: Any, system_prompt: str | None = None) -> int:
                         "private_key",
                     }
                     params = {key: value for key, value in params.items() if key in allowed}
-                    if "bounty_id" not in params:
+                    if isinstance(params.get("bounty_id"), str):
+                        params["bounty_id"] = params["bounty_id"].strip().strip("`\"',")
+                    if not params.get("bounty_id"):
                         bounty_id = _extract_bounty_id(user_input)
                         if bounty_id is not None:
                             params["bounty_id"] = bounty_id
-                    if "report_cid" not in params:
+                    if isinstance(params.get("report_cid"), str):
+                        params["report_cid"] = params["report_cid"].strip().strip("`\"',")
+                    if not params.get("report_cid"):
                         report_cid = _extract_report_cid(user_input)
                         if report_cid:
                             params["report_cid"] = report_cid

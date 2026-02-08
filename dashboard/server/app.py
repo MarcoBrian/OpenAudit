@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+import os
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -19,6 +22,7 @@ if str(ROOT_DIR) not in sys.path:
 
 from agents.cli import run_graph, run_linear
 from agents.progress import ProgressReporter
+from agents import langchain_agent as lc_agent
 
 # Local modules
 from dashboard.server.pinata import PinataError, gateway_url, pin_json
@@ -28,6 +32,7 @@ logger = logging.getLogger(__name__)
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 RUNS_DIR = BASE_DIR / "runs"
+AGENT_SESSIONS_DIR = RUNS_DIR / "agent_sessions"
 
 load_dotenv()
 
@@ -39,10 +44,67 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# --- Agent runtime (in-memory sessions) ---
+_AGENT_EXECUTOR = None
+_AGENT_LOCK = threading.Lock()
+_AGENT_SESSIONS: Dict[str, Dict[str, Any]] = {}
+_CHAT_LLM = None
+
 @app.get("/", tags=["health"])
 def health_check():
     """Simple health-check endpoint."""
     return {"status": "ok", "service": "OpenAudit API"}
+
+
+@app.post("/api/agent/chat")
+async def agent_chat(request: Request) -> JSONResponse:
+    body = await request.json()
+    message = (body.get("message") or "").strip()
+    if not message:
+        return JSONResponse({"error": "Missing 'message' field"}, status_code=400)
+
+    session_id = body.get("session_id") or uuid.uuid4().hex
+    session_dir = AGENT_SESSIONS_DIR / session_id
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    session = _AGENT_SESSIONS.setdefault(session_id, {"history": []})
+    history: list[dict] = session["history"]
+    history.append({"role": "user", "content": message})
+
+    # Run the agent work in a background thread so the event loop can keep serving
+    # progress polling requests while long analyses run.
+    payload = await asyncio.to_thread(_run_agent_in_session, session_dir, message)
+
+    output = payload.get("output", "")
+    history.append({"role": "assistant", "content": output})
+    action = payload.get("action")
+    duration_ms = payload.get("duration_ms")
+    if action and duration_ms is not None:
+        logger.info("Agent chat action=%s duration_ms=%s session=%s", action, duration_ms, session_id)
+
+    return JSONResponse(
+        {
+            "session_id": session_id,
+            "response": output,
+            "action": action,
+            "duration_ms": duration_ms,
+            "session_dir": str(session_dir),
+            "reports_dir": str(session_dir / "reports"),
+            "submission_path": str(session_dir / "submission.json"),
+            "history": history,
+        }
+    )
+
+
+@app.get("/api/agent/sessions/{session_id}/events")
+def get_agent_events(session_id: str, limit: int = 200) -> JSONResponse:
+    session_dir = AGENT_SESSIONS_DIR / session_id
+    events_path = session_dir / "reports" / "progress.jsonl"
+    if not events_path.exists():
+        return JSONResponse({"events": []})
+    lines = events_path.read_text(encoding="utf-8").splitlines()
+    events = [json.loads(line) for line in lines[-limit:]]
+    return JSONResponse({"events": events})
 
 
 
@@ -72,6 +134,182 @@ def _find_source_file(job_dir: Path) -> Optional[Path]:
     for file in job_dir.glob("*.sol"):
         return file
     return None
+
+
+def _get_agent_executor():
+    global _AGENT_EXECUTOR
+    if _AGENT_EXECUTOR is None:
+        _AGENT_EXECUTOR = lc_agent.create_agent_executor(
+            include_wallet_tools=False,
+            system_prompt=None,
+            verbose=False,
+        )
+    return _AGENT_EXECUTOR
+
+
+def _get_chat_llm():
+    global _CHAT_LLM
+    if _CHAT_LLM is None:
+        _CHAT_LLM = lc_agent._build_llm()
+    return _CHAT_LLM
+
+
+def _build_agent_input(history: list[dict], message: str) -> str:
+    if not history:
+        return message
+    lines = []
+    for item in history:
+        role = item.get("role", "user")
+        content = item.get("content", "")
+        if content:
+            lines.append(f"{role}: {content}")
+    lines.append(f"user: {message}")
+    return "\n".join(lines)
+
+
+def _run_agent_in_session(session_dir: Path, message: str) -> Dict[str, Any]:
+    with _AGENT_LOCK:
+        prev_cwd = os.getcwd()
+        try:
+            os.chdir(session_dir)
+            return _route_agent_message(message)
+        finally:
+            os.chdir(prev_cwd)
+
+
+def _extract_audit_params(text: str) -> Dict[str, Any]:
+    cleaned = text.strip().strip("`")
+    params = lc_agent._extract_json_payload(cleaned) or lc_agent._parse_key_value_args(cleaned)
+    if "file" not in params:
+        match = lc_agent.re.search(r"([\\w./\\-\\\\]+\\.sol)", cleaned)
+        if match:
+            params["file"] = match.group(1)
+        else:
+            for token in cleaned.split():
+                if ".sol" in token:
+                    params["file"] = token.strip("`\"'")
+                    break
+    return params
+
+
+def _route_agent_message(message: str) -> Dict[str, Any]:
+    start = time.perf_counter()
+    intent = lc_agent._detect_action_intent(message)
+    if intent is None:
+        try:
+            llm = _get_chat_llm()
+            intent = lc_agent._classify_intent_with_llm(message, llm)
+        except Exception:
+            intent = None
+
+    if intent is None:
+        try:
+            llm = _get_chat_llm()
+            response = llm.invoke(
+                [
+                    lc_agent.SystemMessage(content=lc_agent.DEFAULT_CHAT_SYSTEM_PROMPT),
+                    lc_agent.HumanMessage(content=message),
+                ]
+            )
+            output = response.content if hasattr(response, "content") else str(response)
+            duration = int((time.perf_counter() - start) * 1000)
+            return {"output": output, "action": "chat", "duration_ms": duration}
+        except Exception as exc:  # noqa: BLE001
+            duration = int((time.perf_counter() - start) * 1000)
+            return {"output": f"error: failed to process message ({exc})", "action": "chat", "duration_ms": duration}
+
+    action = intent["action"]
+    params = dict(intent["params"])
+
+    def _wrap(output: str) -> Dict[str, Any]:
+        duration = int((time.perf_counter() - start) * 1000)
+        return {"output": output, "action": action, "duration_ms": duration}
+
+    if action == "run_audit":
+        params = {**_extract_audit_params(message), **params}
+        allowed = {"file", "tools", "max_issues", "use_llm", "dump_intermediate", "reports_dir"}
+        params = {key: value for key, value in params.items() if key in allowed}
+        if not params.get("file"):
+            return _wrap("error: missing Solidity file path. Provide `run_audit file=...`.")
+        return _wrap(lc_agent._run_audit_impl(**params))
+
+    if action == "register_agent":
+        allowed = {"metadata_uri", "agent_name", "initial_operator"}
+        params = {key: value for key, value in params.items() if key in allowed}
+        if "agent_name" not in params:
+            candidate = lc_agent._extract_register_agent_name(message)
+            if candidate:
+                params["agent_name"] = candidate
+        return _wrap(lc_agent._register_agent_impl(**params))
+
+    if action == "check_registration":
+        allowed = {"agent_name", "agent_id", "tba_address"}
+        params = {key: value for key, value in params.items() if key in allowed}
+        if not any(key in params for key in ("agent_name", "agent_id", "tba_address")):
+            candidate = lc_agent._extract_agent_name(message)
+            if candidate:
+                params["agent_name"] = candidate
+        return _wrap(lc_agent._check_registration_impl(**params))
+
+    if action == "list_bounties":
+        allowed = {"limit", "rpc_url", "registry_address", "registry"}
+        params = {key: value for key, value in params.items() if key in allowed}
+        return _wrap(lc_agent._list_bounties_impl(**params))
+
+    if action == "analyze_bounty":
+        allowed = {
+            "bounty_id",
+            "tools",
+            "max_issues",
+            "use_llm",
+            "dump_intermediate",
+            "reports_dir",
+            "submission_path",
+            "rpc_url",
+            "registry_address",
+            "registry",
+            "use_etherscan",
+            "source_map",
+        }
+        params = {key: value for key, value in params.items() if key in allowed}
+        if "bounty_id" not in params:
+            bounty_id = lc_agent._extract_bounty_id(message)
+            if bounty_id is not None:
+                params["bounty_id"] = bounty_id
+        if "bounty_id" not in params:
+            return _wrap("error: missing bounty_id. Provide `analyze_bounty bounty_id=...`.")
+        return _wrap(lc_agent._analyze_bounty_impl(**params))
+
+    if action == "pin_submission":
+        allowed = {"submission_path", "name"}
+        params = {key: value for key, value in params.items() if key in allowed}
+        if "submission_path" not in params:
+            params["submission_path"] = "submission.json"
+        return _wrap(lc_agent._pin_submission_impl(**params))
+
+    if action == "submit_bounty":
+        allowed = {"bounty_id", "report_cid", "rpc_url", "registry_address", "registry", "private_key"}
+        params = {key: value for key, value in params.items() if key in allowed}
+        bounty_val = params.get("bounty_id")
+        if isinstance(bounty_val, str):
+            params["bounty_id"] = bounty_val.strip().strip("`\"',")
+        if not params.get("bounty_id") or not lc_agent.re.search(r"(\\d+)", str(params.get("bounty_id", ""))):
+            bounty_id = lc_agent._extract_bounty_id(message)
+            if bounty_id is not None:
+                params["bounty_id"] = bounty_id
+
+        report_val = params.get("report_cid")
+        if isinstance(report_val, str):
+            params["report_cid"] = report_val.strip().strip("`\"',")
+        if not params.get("report_cid"):
+            report_cid = lc_agent._extract_report_cid(message)
+            if report_cid:
+                params["report_cid"] = report_cid
+        if "bounty_id" not in params or "report_cid" not in params:
+            return _wrap("error: missing bounty_id or report_cid.")
+        return _wrap(lc_agent._submit_bounty_impl(**params))
+
+    return _wrap("error: unsupported action.")
 
 
 def _run_job(
