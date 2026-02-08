@@ -8,6 +8,7 @@ libs = ["lib"]
 [rpc_endpoints]
 sepolia = "${SEPOLIA_RPC_URL}"
 base-sepolia = "${BASE_SEPOLIA_RPC_URL}"
+arc-testnet = "${ARC_TESTNET_RPC_URL}"
 anvil = "http://localhost:8545"
 
 [etherscan]
