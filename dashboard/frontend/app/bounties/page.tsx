@@ -45,7 +45,9 @@ export default function BountiesPage() {
             &larr; Audit Runner
           </a>
           <h1>Bounty Settlement</h1>
-          <span className="subtitle">USDC on Arc &bull; Cross-Chain Payouts</span>
+          <span className="subtitle">
+            USDC on Arc &bull; Cross-Chain Payouts
+          </span>
         </div>
         <ConnectKitButton />
       </header>
@@ -73,12 +75,18 @@ export default function BountiesPage() {
 
       <main className="bounties-content">
         {tab === "bounties" && <BountyList />}
-        {tab === "create" && (
-          isConnected ? <CreateBounty /> : <ConnectPrompt action="create bounties" />
-        )}
-        {tab === "resolve" && (
-          isConnected ? <ResolveBounty /> : <ConnectPrompt action="resolve bounties" />
-        )}
+        {tab === "create" &&
+          (isConnected ? (
+            <CreateBounty />
+          ) : (
+            <ConnectPrompt action="create bounties" />
+          ))}
+        {tab === "resolve" &&
+          (isConnected ? (
+            <ResolveBounty />
+          ) : (
+            <ConnectPrompt action="resolve bounties" />
+          ))}
       </main>
 
       <style jsx>{`
@@ -99,15 +107,28 @@ export default function BountiesPage() {
           gap: 1rem;
           flex-wrap: wrap;
         }
-        .header-left { display: flex; flex-direction: column; gap: 0.25rem; }
+        .header-left {
+          display: flex;
+          flex-direction: column;
+          gap: 0.25rem;
+        }
         .back-link {
           color: #888;
           text-decoration: none;
           font-size: 0.85rem;
         }
-        .back-link:hover { color: #aaa; }
-        h1 { margin: 0; font-size: 1.8rem; }
-        .subtitle { color: #6366f1; font-size: 0.85rem; font-weight: 500; }
+        .back-link:hover {
+          color: #aaa;
+        }
+        h1 {
+          margin: 0;
+          font-size: 1.8rem;
+        }
+        .subtitle {
+          color: #6366f1;
+          font-size: 0.85rem;
+          font-weight: 500;
+        }
         .tab-bar {
           display: flex;
           gap: 0.5rem;
@@ -126,9 +147,17 @@ export default function BountiesPage() {
           border-radius: 6px;
           transition: all 0.2s;
         }
-        .tab:hover { color: #ccc; background: #151520; }
-        .tab.active { color: #fff; background: #1a1a2e; }
-        .bounties-content { min-height: 400px; }
+        .tab:hover {
+          color: #ccc;
+          background: #151520;
+        }
+        .tab.active {
+          color: #fff;
+          background: #1a1a2e;
+        }
+        .bounties-content {
+          min-height: 400px;
+        }
       `}</style>
     </div>
   );
@@ -149,7 +178,10 @@ function ConnectPrompt({ action }: { action: string }) {
           border-radius: 12px;
           border: 1px solid #222;
         }
-        p { color: #888; margin-bottom: 1rem; }
+        p {
+          color: #888;
+          margin-bottom: 1rem;
+        }
       `}</style>
     </div>
   );
@@ -181,9 +213,25 @@ function BountyList() {
           functionName: "bounties",
           args: [BigInt(i)],
         });
-        const [sponsor, targetContract, reward, deadline, active, resolved, winner] =
-          data as [string, string, bigint, bigint, boolean, boolean, string];
-        results.push({ id: i, sponsor, targetContract, reward, deadline, active, resolved, winner });
+        const [
+          sponsor,
+          targetContract,
+          reward,
+          deadline,
+          active,
+          resolved,
+          winner,
+        ] = data as [string, string, bigint, bigint, boolean, boolean, string];
+        results.push({
+          id: i,
+          sponsor,
+          targetContract,
+          reward,
+          deadline,
+          active,
+          resolved,
+          winner,
+        });
       } catch {
         // skip
       }
@@ -205,7 +253,11 @@ function BountyList() {
       <div className="empty">
         <p>No bounties yet. Create one to get started.</p>
         <style jsx>{`
-          .empty { text-align: center; padding: 3rem; color: #666; }
+          .empty {
+            text-align: center;
+            padding: 3rem;
+            color: #666;
+          }
         `}</style>
       </div>
     );
@@ -214,17 +266,24 @@ function BountyList() {
   return (
     <div className="bounty-list">
       {bounties.map((b) => (
-        <div key={b.id} className={`bounty-card ${b.resolved ? "resolved" : b.active ? "active" : "cancelled"}`}>
+        <div
+          key={b.id}
+          className={`bounty-card ${b.resolved ? "resolved" : b.active ? "active" : "cancelled"}`}
+        >
           <div className="bounty-top">
             <span className="bounty-id">#{b.id}</span>
-            <span className={`status ${b.resolved ? "resolved" : b.active ? "active" : "cancelled"}`}>
+            <span
+              className={`status ${b.resolved ? "resolved" : b.active ? "active" : "cancelled"}`}
+            >
               {b.resolved ? "Resolved" : b.active ? "Active" : "Cancelled"}
             </span>
           </div>
           <div className="bounty-info">
             <div className="info-row">
               <span className="label">Reward</span>
-              <span className="value usdc">{formatUnits(b.reward, 6)} USDC</span>
+              <span className="value usdc">
+                {formatUnits(b.reward, 6)} USDC
+              </span>
             </div>
             <div className="info-row">
               <span className="label">Target</span>
@@ -236,7 +295,9 @@ function BountyList() {
             </div>
             <div className="info-row">
               <span className="label">Deadline</span>
-              <span className="value">{new Date(Number(b.deadline) * 1000).toLocaleDateString()}</span>
+              <span className="value">
+                {new Date(Number(b.deadline) * 1000).toLocaleDateString()}
+              </span>
             </div>
             {b.resolved && (
               <div className="info-row">
@@ -248,7 +309,11 @@ function BountyList() {
         </div>
       ))}
       <style jsx>{`
-        .bounty-list { display: flex; flex-direction: column; gap: 1rem; }
+        .bounty-list {
+          display: flex;
+          flex-direction: column;
+          gap: 1rem;
+        }
         .bounty-card {
           background: #111118;
           border: 1px solid #222;
@@ -256,12 +321,28 @@ function BountyList() {
           padding: 1.25rem;
           transition: border-color 0.2s;
         }
-        .bounty-card:hover { border-color: #333; }
-        .bounty-card.resolved { border-left: 3px solid #22c55e; }
-        .bounty-card.active { border-left: 3px solid #6366f1; }
-        .bounty-card.cancelled { border-left: 3px solid #666; }
-        .bounty-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.75rem; }
-        .bounty-id { font-weight: 700; font-size: 1.1rem; }
+        .bounty-card:hover {
+          border-color: #333;
+        }
+        .bounty-card.resolved {
+          border-left: 3px solid #22c55e;
+        }
+        .bounty-card.active {
+          border-left: 3px solid #6366f1;
+        }
+        .bounty-card.cancelled {
+          border-left: 3px solid #666;
+        }
+        .bounty-top {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          margin-bottom: 0.75rem;
+        }
+        .bounty-id {
+          font-weight: 700;
+          font-size: 1.1rem;
+        }
         .status {
           font-size: 0.75rem;
           font-weight: 600;
@@ -270,16 +351,47 @@ function BountyList() {
           text-transform: uppercase;
           letter-spacing: 0.5px;
         }
-        .status.active { background: #1e1b4b; color: #818cf8; }
-        .status.resolved { background: #052e16; color: #4ade80; }
-        .status.cancelled { background: #1a1a1a; color: #888; }
-        .bounty-info { display: flex; flex-direction: column; gap: 0.4rem; }
-        .info-row { display: flex; justify-content: space-between; }
-        .label { color: #666; font-size: 0.85rem; }
-        .value { font-size: 0.85rem; }
-        .value.usdc { color: #22c55e; font-weight: 600; }
-        .value.mono { font-family: monospace; font-size: 0.8rem; }
-        .loading { text-align: center; padding: 3rem; color: #666; }
+        .status.active {
+          background: #1e1b4b;
+          color: #818cf8;
+        }
+        .status.resolved {
+          background: #052e16;
+          color: #4ade80;
+        }
+        .status.cancelled {
+          background: #1a1a1a;
+          color: #888;
+        }
+        .bounty-info {
+          display: flex;
+          flex-direction: column;
+          gap: 0.4rem;
+        }
+        .info-row {
+          display: flex;
+          justify-content: space-between;
+        }
+        .label {
+          color: #666;
+          font-size: 0.85rem;
+        }
+        .value {
+          font-size: 0.85rem;
+        }
+        .value.usdc {
+          color: #22c55e;
+          font-weight: 600;
+        }
+        .value.mono {
+          font-family: monospace;
+          font-size: 0.8rem;
+        }
+        .loading {
+          text-align: center;
+          padding: 3rem;
+          color: #666;
+        }
       `}</style>
     </div>
   );
@@ -292,7 +404,9 @@ function CreateBounty() {
   const [target, setTarget] = useState("");
   const [rewardStr, setRewardStr] = useState("");
   const [daysFromNow, setDaysFromNow] = useState("7");
-  const [step, setStep] = useState<"form" | "approving" | "creating" | "done">("form");
+  const [step, setStep] = useState<"form" | "approving" | "creating" | "done">(
+    "form",
+  );
 
   const { writeContract: approve, data: approveTxHash } = useWriteContract();
   const { writeContract: create, data: createTxHash } = useWriteContract();
@@ -308,7 +422,9 @@ function CreateBounty() {
     if (approveConfirmed && step === "approving") {
       setStep("creating");
       const amount = parseUnits(rewardStr, 6);
-      const deadline = BigInt(Math.floor(Date.now() / 1000) + Number(daysFromNow) * 86400);
+      const deadline = BigInt(
+        Math.floor(Date.now() / 1000) + Number(daysFromNow) * 86400,
+      );
       create({
         address: CONTRACTS.REGISTRY,
         abi: REGISTRY_ABI,
@@ -344,7 +460,14 @@ function CreateBounty() {
         <p className="tx-hash">
           Tx: <code>{createTxHash ? shortAddr(createTxHash) : "—"}</code>
         </p>
-        <button className="btn" onClick={() => { setStep("form"); setTarget(""); setRewardStr(""); }}>
+        <button
+          className="btn"
+          onClick={() => {
+            setStep("form");
+            setTarget("");
+            setRewardStr("");
+          }}
+        >
           Create Another
         </button>
         <style jsx>{`
@@ -355,10 +478,20 @@ function CreateBounty() {
             padding: 2rem;
             text-align: center;
           }
-          h3 { color: #4ade80; margin: 0 0 0.5rem; }
-          p { color: #a3e5b7; margin: 0.25rem 0; }
-          .tx-hash { font-size: 0.8rem; }
-          code { color: #86efac; }
+          h3 {
+            color: #4ade80;
+            margin: 0 0 0.5rem;
+          }
+          p {
+            color: #a3e5b7;
+            margin: 0.25rem 0;
+          }
+          .tx-hash {
+            font-size: 0.8rem;
+          }
+          code {
+            color: #86efac;
+          }
           .btn {
             margin-top: 1rem;
             background: #1e1b4b;
@@ -377,7 +510,10 @@ function CreateBounty() {
   return (
     <div className="create-form">
       <h3>Create USDC Bounty</h3>
-      <p className="desc">Fund a bounty with USDC on Arc. Agents submit findings, you pick the winner.</p>
+      <p className="desc">
+        Fund a bounty with USDC on Arc. Agents submit findings, you pick the
+        winner.
+      </p>
       <div className="field">
         <label>Target Contract Address</label>
         <input
@@ -419,8 +555,8 @@ function CreateBounty() {
         {step === "approving"
           ? "Approving USDC..."
           : step === "creating"
-          ? "Creating Bounty..."
-          : "Approve & Create Bounty"}
+            ? "Creating Bounty..."
+            : "Approve & Create Bounty"}
       </button>
 
       <style jsx>{`
@@ -430,10 +566,23 @@ function CreateBounty() {
           border-radius: 12px;
           padding: 2rem;
         }
-        h3 { margin: 0 0 0.25rem; }
-        .desc { color: #888; font-size: 0.85rem; margin: 0 0 1.5rem; }
-        .field { margin-bottom: 1rem; }
-        label { display: block; color: #888; font-size: 0.8rem; margin-bottom: 0.3rem; }
+        h3 {
+          margin: 0 0 0.25rem;
+        }
+        .desc {
+          color: #888;
+          font-size: 0.85rem;
+          margin: 0 0 1.5rem;
+        }
+        .field {
+          margin-bottom: 1rem;
+        }
+        label {
+          display: block;
+          color: #888;
+          font-size: 0.8rem;
+          margin-bottom: 0.3rem;
+        }
         input {
           width: 100%;
           background: #0a0a0f;
@@ -446,8 +595,12 @@ function CreateBounty() {
           outline: none;
           box-sizing: border-box;
         }
-        input:focus { border-color: #6366f1; }
-        input:disabled { opacity: 0.5; }
+        input:focus {
+          border-color: #6366f1;
+        }
+        input:disabled {
+          opacity: 0.5;
+        }
         .btn-primary {
           width: 100%;
           background: #6366f1;
@@ -461,8 +614,13 @@ function CreateBounty() {
           cursor: pointer;
           transition: background 0.2s;
         }
-        .btn-primary:hover:not(:disabled) { background: #4f46e5; }
-        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary:hover:not(:disabled) {
+          background: #4f46e5;
+        }
+        .btn-primary:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
       `}</style>
     </div>
   );
@@ -475,8 +633,12 @@ function ResolveBounty() {
   const [bountyIdStr, setBountyIdStr] = useState("");
   const [winnerAddr, setWinnerAddr] = useState("");
   const [score, setScore] = useState("80");
-  const [step, setStep] = useState<"form" | "resolving" | "bridging" | "done">("form");
-  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>({ state: "idle" });
+  const [step, setStep] = useState<"form" | "resolving" | "bridging" | "done">(
+    "form",
+  );
+  const [bridgeStatus, setBridgeStatus] = useState<BridgeStatus>({
+    state: "idle",
+  });
   const [winnerPayoutChain, setWinnerPayoutChain] = useState("");
   const [resolvedReward, setResolvedReward] = useState<bigint>(0n);
 
@@ -498,7 +660,7 @@ function ResolveBounty() {
           recipientAddress: winnerAddr,
           payoutChain: winnerPayoutChain,
         },
-        setBridgeStatus
+        setBridgeStatus,
       ).then(() => {
         setStep("done");
       });
@@ -519,7 +681,15 @@ function ResolveBounty() {
         functionName: "bounties",
         args: [bountyId],
       });
-      const [, , reward] = data as [string, string, bigint, bigint, boolean, boolean, string];
+      const [, , reward] = data as [
+        string,
+        string,
+        bigint,
+        bigint,
+        boolean,
+        boolean,
+        string,
+      ];
       setResolvedReward(reward);
     } catch {
       // fallback
@@ -561,7 +731,9 @@ function ResolveBounty() {
       <div className="success-card">
         <h3>Bounty Settled!</h3>
         <p>
-          {resolvedReward > 0n ? `${formatUnits(resolvedReward, 6)} USDC` : "Reward"}{" "}
+          {resolvedReward > 0n
+            ? `${formatUnits(resolvedReward, 6)} USDC`
+            : "Reward"}{" "}
           {winnerPayoutChain && winnerPayoutChain !== "arc"
             ? `bridged to ${CHAIN_LABELS[winnerPayoutChain] || winnerPayoutChain}`
             : "settled on Arc"}
@@ -569,12 +741,21 @@ function ResolveBounty() {
         <p className="winner">
           Winner: <code>{shortAddr(winnerAddr)}</code>
         </p>
-        {bridgeStatus.state === "complete" && "destTxHash" in bridgeStatus && bridgeStatus.destTxHash && (
-          <p className="tx-hash">
-            Destination Tx: <code>{shortAddr(bridgeStatus.destTxHash)}</code>
-          </p>
-        )}
-        <button className="btn" onClick={() => { setStep("form"); setBountyIdStr(""); setWinnerAddr(""); }}>
+        {bridgeStatus.state === "complete" &&
+          "destTxHash" in bridgeStatus &&
+          bridgeStatus.destTxHash && (
+            <p className="tx-hash">
+              Destination Tx: <code>{shortAddr(bridgeStatus.destTxHash)}</code>
+            </p>
+          )}
+        <button
+          className="btn"
+          onClick={() => {
+            setStep("form");
+            setBountyIdStr("");
+            setWinnerAddr("");
+          }}
+        >
           Resolve Another
         </button>
         <style jsx>{`
@@ -585,11 +766,23 @@ function ResolveBounty() {
             padding: 2rem;
             text-align: center;
           }
-          h3 { color: #4ade80; margin: 0 0 0.5rem; }
-          p { color: #a3e5b7; margin: 0.25rem 0; }
-          .winner { font-size: 0.9rem; }
-          .tx-hash { font-size: 0.8rem; }
-          code { color: #86efac; }
+          h3 {
+            color: #4ade80;
+            margin: 0 0 0.5rem;
+          }
+          p {
+            color: #a3e5b7;
+            margin: 0.25rem 0;
+          }
+          .winner {
+            font-size: 0.9rem;
+          }
+          .tx-hash {
+            font-size: 0.8rem;
+          }
+          code {
+            color: #86efac;
+          }
           .btn {
             margin-top: 1rem;
             background: #1e1b4b;
@@ -609,8 +802,8 @@ function ResolveBounty() {
     <div className="resolve-form">
       <h3>Resolve Bounty &amp; Settle Payment</h3>
       <p className="desc">
-        Pick the winning agent. USDC is released from Arc and bridged to the winner&apos;s
-        preferred chain via Circle Bridge Kit (CCTP).
+        Pick the winning agent. USDC is released from Arc and bridged to the
+        winner&apos;s preferred chain via Circle Bridge Kit (CCTP).
       </p>
 
       <div className="field">
@@ -655,8 +848,8 @@ function ResolveBounty() {
         {step === "resolving"
           ? "Resolving on-chain..."
           : step === "bridging"
-          ? `Bridging USDC${winnerPayoutChain ? ` to ${CHAIN_LABELS[winnerPayoutChain] || winnerPayoutChain}` : ""}...`
-          : "Resolve & Bridge Payout"}
+            ? `Bridging USDC${winnerPayoutChain ? ` to ${CHAIN_LABELS[winnerPayoutChain] || winnerPayoutChain}` : ""}...`
+            : "Resolve & Bridge Payout"}
       </button>
 
       {step !== "form" && (
@@ -686,10 +879,23 @@ function ResolveBounty() {
           border-radius: 12px;
           padding: 2rem;
         }
-        h3 { margin: 0 0 0.25rem; }
-        .desc { color: #888; font-size: 0.85rem; margin: 0 0 1.5rem; }
-        .field { margin-bottom: 1rem; }
-        label { display: block; color: #888; font-size: 0.8rem; margin-bottom: 0.3rem; }
+        h3 {
+          margin: 0 0 0.25rem;
+        }
+        .desc {
+          color: #888;
+          font-size: 0.85rem;
+          margin: 0 0 1.5rem;
+        }
+        .field {
+          margin-bottom: 1rem;
+        }
+        label {
+          display: block;
+          color: #888;
+          font-size: 0.8rem;
+          margin-bottom: 0.3rem;
+        }
         input {
           width: 100%;
           background: #0a0a0f;
@@ -702,8 +908,12 @@ function ResolveBounty() {
           outline: none;
           box-sizing: border-box;
         }
-        input:focus { border-color: #6366f1; }
-        input:disabled { opacity: 0.5; }
+        input:focus {
+          border-color: #6366f1;
+        }
+        input:disabled {
+          opacity: 0.5;
+        }
         .btn-primary {
           width: 100%;
           background: #6366f1;
@@ -717,8 +927,13 @@ function ResolveBounty() {
           cursor: pointer;
           transition: background 0.2s;
         }
-        .btn-primary:hover:not(:disabled) { background: #4f46e5; }
-        .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+        .btn-primary:hover:not(:disabled) {
+          background: #4f46e5;
+        }
+        .btn-primary:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+        }
         .status-bar {
           margin-top: 1.5rem;
           display: flex;
@@ -753,9 +968,17 @@ function StatusStep({
           font-size: 0.85rem;
           color: #555;
         }
-        .step.active { color: #818cf8; }
-        .step.done { color: #4ade80; }
-        .dot { font-size: 0.9rem; width: 1.2rem; text-align: center; }
+        .step.active {
+          color: #818cf8;
+        }
+        .step.done {
+          color: #4ade80;
+        }
+        .dot {
+          font-size: 0.9rem;
+          width: 1.2rem;
+          text-align: center;
+        }
       `}</style>
     </div>
   );
