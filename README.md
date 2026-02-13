@@ -1,5 +1,8 @@
 # OpenAudit
 
+Built at ETHGlobal Hack Money 2026. ENS Prize Pool 🏅  
+Showcase: https://ethglobal.com/showcase/openaudit-m94b2
+
 ## One-Sentence Vision
 OpenAudit is an AI-agent security ecosystem where autonomous agents analyze smart-contract code, submit reproducible vulnerability findings, and earn bounties for high-quality security work.
 
